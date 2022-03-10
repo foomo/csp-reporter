@@ -1,0 +1,20 @@
+image:
+  repository: foomo/csp-reporter
+  pullPolicy: Always
+  # Overrides the image tag whose default is the chart appVersion.
+  tag:        "latest"
+
+ingress:
+  enabled:   true
+  className: "haproxy"
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: csp.monitoring.mzg.bestbytes.net
+      paths:
+        - path:     /
+          pathType: ImplementationSpecific
+  tls:
+    - secretName: csp-reporting-cert
+      hosts:
+        - csp.monitoring.mzg.bestbytes.net
