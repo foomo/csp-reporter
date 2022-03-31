@@ -10,7 +10,7 @@ run.example:
 
 .phony: build
 build:
-	docker build --platform linux/amd64 --push --progress=plain -t foomo/csp-reporter:$(TAG) -f docker/Dockerfile .
+	docker build --platform linux/amd64 --progress=plain -t foomo/csp-reporter:$(TAG) -f docker/Dockerfile .
 
 .phony: deploy
 deploy:
