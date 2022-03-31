@@ -1,4 +1,9 @@
 TAG?=latest
+run.reporter:
+	go run ./cmd/reporter/main.go --address=:8080
+
+run.example:
+	go run ./example/server/main.go
 
 .phony: build
 build:

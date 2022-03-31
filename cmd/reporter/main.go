@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -8,8 +9,27 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"golang.org/x/sync/errgroup"
+)
+
+const (
+	metricsNamespace = "foomo"
+	metricsSubsystem = "csr"
+)
+
+var (
+	violatedDirectiveCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace:   metricsNamespace,
+		Subsystem:   metricsSubsystem,
+		Name:        "violated_directive_total",
+		Help:        "Counts the number of violated directive reports",
+		ConstLabels: nil,
+	}, []string{"directive"})
 )
 
 type ContentSecurityPolicyReport struct {
@@ -45,43 +65,55 @@ func (csp ContentSecurityPolicyReport) String() string {
 }
 
 func main() {
-	address := flag.String("address", ":80", "address to listen on")
-
+	reporterAddress := flag.String("address", ":80", "reporter address to listen on")
+	prometheusAddress := flag.String("prometheus-address", ":9200", "prometheus address to listen to")
 	flag.Parse()
 
 	log := InitLogger()
 	defer log.Sync()
 
-	log.Info(fmt.Sprintf("Starting csp server listener on address %q\n", *address))
+	log.Info(fmt.Sprintf("Starting csp server listener on address %q\n", *reporterAddress))
 
-	err := http.ListenAndServe(*address, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	g, _ := errgroup.WithContext(context.Background())
+	// Run CSV Reporter
+	g.Go(func() error {
+		return http.ListenAndServe(*reporterAddress, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-		switch r.Method {
-		case "POST":
-			var cspr ContentSecurityPolicyReport
-			err := json.NewDecoder(r.Body).Decode(&cspr)
-			if err != nil {
-				log.Warn("Could not deserialize request", zap.Error(err))
-				http.Error(w, `{"message":"bad request data"}`, http.StatusBadRequest)
+			switch r.Method {
+			case "POST":
+				var cspr ContentSecurityPolicyReport
+				err := json.NewDecoder(r.Body).Decode(&cspr)
+				if err != nil {
+					log.Warn("Could not deserialize request", zap.Error(err))
+					http.Error(w, `{"message":"bad request data"}`, http.StatusBadRequest)
+				}
+				report := cspr.Report
+
+				// Increase Violated Directive (With Cardinality)
+				violatedDirectiveCount.WithLabelValues(report.ViolatedDirective).Inc()
+
+				log.Info("content security policy report submitted",
+					zap.String("document-uri", report.DocumentUri),
+					zap.String("referrer", report.Referrer),
+					zap.String("violated-directive", report.ViolatedDirective),
+					zap.String("effective-directive", report.EffectiveDirective),
+					zap.String("original-policy", report.EffectiveDirective),
+					zap.String("blocked-uri", report.BlockedUri),
+					zap.Int("status-code", report.StatusCode),
+				)
+				w.WriteHeader(http.StatusNoContent)
+			case "GET":
+				_, _ = w.Write([]byte("hello from CSV reporter"))
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
 			}
-			report := cspr.Report
-			log.Info("content security policy report submitted",
-				zap.String("document-uri", report.DocumentUri),
-				zap.String("referrer", report.Referrer),
-				zap.String("violated-directive", report.ViolatedDirective),
-				zap.String("effective-directive", report.EffectiveDirective),
-				zap.String("original-policy", report.EffectiveDirective),
-				zap.String("blocked-uri", report.BlockedUri),
-				zap.Int("status-code", report.StatusCode),
-			)
-			w.WriteHeader(http.StatusNoContent)
-		case "GET":
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	}))
-	log.Fatal("Server stopped", zap.Error(err))
+		}))
+	})
+	// Start Prometheus Listener
+	g.Go(func() error {
+		return http.ListenAndServe(*prometheusAddress, promhttp.Handler())
+	})
+	log.Fatal("Server stopped", zap.Error(g.Wait()))
 }
 
 func InitLogger() *zap.Logger {
