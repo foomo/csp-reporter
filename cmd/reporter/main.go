@@ -23,13 +23,13 @@ const (
 )
 
 var (
-	violatedDirectiveCount = promauto.NewCounterVec(prometheus.CounterOpts{
+	reportCount = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace:   metricsNamespace,
 		Subsystem:   metricsSubsystem,
-		Name:        "violated_directive_total",
-		Help:        "Counts the number of violated directive reports",
+		Name:        "reports_total",
+		Help:        "Counts the number of reports",
 		ConstLabels: nil,
-	}, []string{"directive"})
+	})
 )
 
 type ContentSecurityPolicyReport struct {
@@ -90,7 +90,7 @@ func main() {
 				report := cspr.Report
 
 				// Increase Violated Directive (With Cardinality)
-				violatedDirectiveCount.WithLabelValues(report.ViolatedDirective).Inc()
+				reportCount.Inc()
 
 				log.Info("content security policy report submitted",
 					zap.String("document-uri", report.DocumentUri),
