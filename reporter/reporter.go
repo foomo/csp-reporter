@@ -2,6 +2,7 @@ package reporter
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,18 +24,23 @@ var (
 		Name:        "effective_directive_violation_total",
 		Help:        "Counts the number of effective directive violations",
 		ConstLabels: nil,
-	}, []string{"effective-directive"})
+	}, []string{"directive"})
 )
 
+// ContentSecurityPolicyReport object representing a CSP violation
+// https://csplite.com/csp66/#sample-violation-report-to
+// https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy-Report-Only
 type ContentSecurityPolicyReport struct {
 	Report struct {
+		BlockedUri         string `json:"blocked-uri"`
+		Disposition        string `json:"disposition"`
 		DocumentUri        string `json:"document-uri"`
-		Referrer           string `json:"referrer"`
-		ViolatedDirective  string `json:"violated-directive"`
 		EffectiveDirective string `json:"effective-directive"`
 		OriginalPolicy     string `json:"original-policy"`
-		BlockedUri         string `json:"blocked-uri"`
+		Referrer           string `json:"referrer"`
+		ScriptSample       string `json:"script-sample"`
 		StatusCode         int    `json:"status-code"`
+		ViolatedDirective  string `json:"violated-directive"`
 	} `json:"csp-report"`
 }
 
@@ -60,6 +66,20 @@ func (csp ContentSecurityPolicyReport) String() string {
 
 func NewHandler(log *zap.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if r := recover(); r != nil {
+				var err error
+				switch t := r.(type) {
+				case string:
+					err = errors.New(t)
+				case error:
+					err = t
+				default:
+					err = errors.New("unknown error")
+				}
+				log.With(zap.Error(err)).Error("Panic occurred in http handler")
+			}
+		}()
 
 		switch r.Method {
 		case "POST":
