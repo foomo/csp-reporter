@@ -13,6 +13,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	defaultLogSamplingCount = 100
+	defaultLogEncoding      = "json"
+)
+
 func main() {
 	reporterAddress := flag.String("address", ":80", "reporter address to listen on")
 	prometheusAddress := flag.String("prometheus-address", ":9200", "prometheus address to listen to")
@@ -45,10 +50,10 @@ func InitLogger() *zap.Logger {
 		Level:       zap.NewAtomicLevelAt(zap.InfoLevel),
 		Development: false,
 		Sampling: &zap.SamplingConfig{
-			Initial:    100,
-			Thereafter: 100,
+			Initial:    defaultLogSamplingCount,
+			Thereafter: defaultLogSamplingCount,
 		},
-		Encoding:         "json",
+		Encoding:         defaultLogEncoding,
 		EncoderConfig:    encoder,
 		OutputPaths:      []string{"stderr"},
 		ErrorOutputPaths: []string{"stderr"},
