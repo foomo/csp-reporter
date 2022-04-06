@@ -105,11 +105,12 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 				zap.String("effective-directive", report.EffectiveDirective),
 				zap.String("original-policy", report.EffectiveDirective),
 				zap.String("blocked-uri", report.BlockedUri),
+				zap.String("user-agent", r.UserAgent()),
 				zap.Int("status-code", report.StatusCode),
 			)
 			w.WriteHeader(http.StatusNoContent)
 		case "GET":
-			_, _ = w.Write([]byte("hello from CSV reporter"))
+			_, _ = w.Write([]byte("Welcome to CSV Reporter"))
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
