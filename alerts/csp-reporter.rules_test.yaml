@@ -39,20 +39,20 @@ tests:
             exp_annotations:
               summary: Enforced CSP violations of site prod spiked
 
-  # Quiet sites: only the selected prod alerts, and only after 6 hours.
+  # Quiet sites: prod reports until 1h, then only the selected prod alerts, 6 hours after its last report.
   - interval: 1m
     input_series:
       - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="prod",directive="img-src",disposition="enforce"}'
-        values: '0x480'
+        values: '0+1x60 60x480'
       - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="stage",directive="img-src",disposition="enforce"}'
-        values: '0x480'
+        values: '0x540'
       - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="other",directive="img-src",disposition="enforce"}'
-        values: '0x480'
+        values: '0x540'
     alert_rule_test:
-      - eval_time: 5h
+      - eval_time: 6h50m
         alertname: CSPSiteSilent
         exp_alerts: []
-      - eval_time: 7h
+      - eval_time: 7h10m
         alertname: CSPSiteSilent
         exp_alerts:
           - exp_labels:

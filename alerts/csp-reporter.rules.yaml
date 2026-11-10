@@ -32,9 +32,10 @@ groups:
           summary: Enforced CSP violations of site {{ $labels.site }} spiked
 
       # A site that always has some violations stopped reporting; copy the rule for every such site, never for other.
+      # The 1h window and the 5h hold add up to the 6 silent hours in the summary.
       - alert: CSPSiteSilent
         expr: sum by (site) (increase(foomo_csr_site_violations_total{site="prod"}[1h])) == 0
-        for: 6h
+        for: 5h
         labels:
           severity: ticket
         annotations:
