@@ -50,6 +50,9 @@ type ContentSecurityPolicyReport struct {
 	ScriptSample       string `json:"script-sample"`
 	StatusCode         int    `json:"status-code"`
 	ViolatedDirective  string `json:"violated-directive"`
+	SourceFile         string `json:"source-file"`
+	LineNumber         int    `json:"line-number"`
+	ColumnNumber       int    `json:"column-number"`
 }
 
 // handler holds what the options turned on; a nil field is a feature that is off.
@@ -59,6 +62,8 @@ type handler struct {
 	noise      *noiseFilter
 	sites      *Sites
 	logLimiter *logLimiter
+	// uploads holds one token per POST whose body is over 64 KiB, declared or read so far, until it is answered.
+	uploads chan struct{}
 }
 
 func NewHandler(log *zap.Logger, opts ...Option) http.HandlerFunc {
@@ -78,6 +83,9 @@ func NewHandler(log *zap.Logger, opts ...Option) http.HandlerFunc {
 	}
 	if o.logLimitPerKey > 0 {
 		h.logLimiter = newLogLimiter(o)
+	}
+	if o.maxUploads > 0 {
+		h.uploads = make(chan struct{}, o.maxUploads)
 	}
 	initSiteSeries(o.sites)
 
@@ -128,7 +136,30 @@ func NewHandler(log *zap.Logger, opts ...Option) http.HandlerFunc {
 				return
 			}
 			// The server's own writer, so MaxBytesReader can still close the connection on overflow.
-			reports, stats, err := decodeFilteredReports(http.MaxBytesReader(rw, r.Body, maxBodyBytes), h.noise)
+			body := io.Reader(http.MaxBytesReader(rw, r.Body, maxBodyBytes))
+			// A small declared length needs no slot: the server reads no more than it declares.
+			large := r.ContentLength > maxUnslottedBodyBytes
+			if h.uploads != nil && r.ContentLength < 0 {
+				// An unknown length takes a slot only once it has carried more than 64 KiB, so small chunked reports never wait.
+				var prefix bytes.Buffer
+				// A read error is not lost: MaxBytesReader returns it again when the decoder reads on.
+				_, _ = prefix.ReadFrom(io.LimitReader(body, maxUnslottedBodyBytes+1))
+				large = prefix.Len() > maxUnslottedBodyBytes
+				body = io.MultiReader(&prefix, body)
+			}
+			if h.uploads != nil && large {
+				select {
+				case h.uploads <- struct{}{}:
+					// Deferred, so the slot is freed on every return and on a panic.
+					defer func() { <-h.uploads }()
+				default:
+					requestsRejectedCount.WithLabelValues(rejectOverloaded).Inc()
+					w.Header().Set("Retry-After", "1")
+					http.Error(w, `{"message":"overloaded"}`, http.StatusServiceUnavailable)
+					return
+				}
+			}
+			reports, stats, err := decodeFilteredReports(body, h.noise)
 			requestBodyBytes.Observe(float64(stats.bodyBytes))
 			if errors.Is(err, errBodyTooLarge) {
 				requestsRejectedCount.WithLabelValues(rejectBodyTooLarge).Inc()
@@ -190,6 +221,9 @@ func isKnownDirective(directive string) bool {
 // maxBodyBytes caps one request; a Reporting API batch of CSP reports stays far below it.
 const maxBodyBytes = 1 << 20
 
+// maxUnslottedBodyBytes is the largest declared body that takes no upload slot, so single reports never wait for one.
+const maxUnslottedBodyBytes = 64 << 10
+
 // maxReportsPerRequest caps the reports recorded from one batch, so one request cannot flood the
 // log and the metric; a browser batch stays far below it. Reports beyond the cap are dropped.
 const maxReportsPerRequest = 100
@@ -218,6 +252,9 @@ type CSPViolationReportBody struct {
 	Sample             string `json:"sample"`
 	Disposition        string `json:"disposition"`
 	StatusCode         int    `json:"statusCode"`
+	SourceFile         string `json:"sourceFile"`
+	LineNumber         int    `json:"lineNumber"`
+	ColumnNumber       int    `json:"columnNumber"`
 }
 
 // isEmpty is true for a missing, null or mistyped body: every CSP violation names its document
@@ -338,8 +375,11 @@ func decodeFilteredReports(body io.Reader, noise *noiseFilter) ([]receivedReport
 		return nil, stats, err
 	}
 	var report receivedReport
+	// A source location alone names no violation, as for Reporting API bodies.
+	withoutLocation := single.CSP
+	withoutLocation.SourceFile, withoutLocation.LineNumber, withoutLocation.ColumnNumber = "", 0, 0
 	switch {
-	case single.CSP != (ContentSecurityPolicyReport{}):
+	case withoutLocation != (ContentSecurityPolicyReport{}):
 		stats.format, report = formatLegacy, receivedReport{CSP: single.CSP}
 	case single.Type == cspViolationReportType && !single.Body.isEmpty():
 		stats.format, report = formatReportingAPIObject, fromReportingAPI(single.ReportingAPIReport)
@@ -392,6 +432,9 @@ func fromReportingAPI(entry ReportingAPIReport) receivedReport {
 			StatusCode:         b.StatusCode,
 			// CSP3 reports name only the effective directive.
 			ViolatedDirective: b.EffectiveDirective,
+			SourceFile:        b.SourceFile,
+			LineNumber:        b.LineNumber,
+			ColumnNumber:      b.ColumnNumber,
 		},
 		UserAgent: entry.UserAgent,
 	}
@@ -410,13 +453,22 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
+// dispositionLabel is the disposition for the log line and the metrics; a report that names none is unknown, not enforced.
+func dispositionLabel(disposition string) string {
+	switch disposition {
+	case "enforce":
+		return "enforce"
+	// CSP3 says "report" but MDN documents "reporting", so either one means report-only.
+	case "report", "reporting":
+		return "report"
+	default:
+		return "unknown"
+	}
+}
+
 func (h *handler) logReport(report receivedReport, requestUserAgent, format string) {
 	csp := report.CSP
-	disposition := "enforce"
-	// CSP3 says "report" but MDN documents "reporting", so either one means report-only.
-	if csp.Disposition == "report" || csp.Disposition == "reporting" {
-		disposition = "report"
-	}
+	disposition := dispositionLabel(csp.Disposition)
 	userAgent := report.UserAgent
 	if userAgent == "" {
 		userAgent = requestUserAgent
@@ -452,6 +504,9 @@ func (h *handler) logReport(report receivedReport, requestUserAgent, format stri
 		zap.String("user-agent", capBytes(userAgent, maxLoggedValueBytes)),
 		zap.String("script-sample", capRunes(csp.ScriptSample, maxLoggedSampleRunes)),
 		zap.Int("status-code", csp.StatusCode),
+		zap.String("source-file", loggedURI(csp.SourceFile)),
+		zap.Int("line-number", csp.LineNumber),
+		zap.Int("column-number", csp.ColumnNumber),
 		zap.String("site", site),
 	)
 }

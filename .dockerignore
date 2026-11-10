@@ -4,6 +4,7 @@
 example/
 dist/
 dashboards/
+alerts/
 research_notes/
 reports/
 *.md

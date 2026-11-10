@@ -1,0 +1,80 @@
+# Example Prometheus alerting rules for csp-reporter. Adjust the job label, the site names and the
+# thresholds to your deployment before loading them.
+groups:
+  - name: csp-reporter
+    rules:
+      # No reporter metrics at all; the job label is whatever your scrape configuration gives the reporter.
+      - alert: CSPReporterDown
+        expr: absent(foomo_csr_http_requests_in_flight{job="csp-reporter"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: No csp-reporter metrics for 5 minutes
+
+      # Enforced violations of a site above an absolute floor and three times the same half hour a day earlier.
+      # A site without a series a day earlier, such as a new one, is judged by the floor alone.
+      # Reports without a disposition (unknown) are left out; they are mostly WebKit report-uri traffic.
+      - alert: CSPEnforcedViolationSpike
+        expr: |
+          sum by (site) (rate(foomo_csr_site_violations_total{disposition="enforce"}[30m])) > 0.1
+          and
+          sum by (site) (rate(foomo_csr_site_violations_total{disposition="enforce"}[30m]))
+            > 3 * (
+              sum by (site) (rate(foomo_csr_site_violations_total{disposition="enforce"}[30m] offset 1d))
+              or
+              0 * sum by (site) (rate(foomo_csr_site_violations_total{disposition="enforce"}[30m]))
+            )
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Enforced CSP violations of site {{ $labels.site }} spiked
+
+      # A site that always has some violations stopped reporting; copy the rule for every such site, never for other.
+      # The 1h window and the 5h hold add up to the 6 silent hours in the summary.
+      - alert: CSPSiteSilent
+        expr: sum by (site) (increase(foomo_csr_site_violations_total{site="prod"}[1h])) == 0
+        for: 5h
+        labels:
+          severity: ticket
+        annotations:
+          summary: No CSP reports for site {{ $labels.site }} for 6 hours
+
+      # A directive the reporter does not know, or reports without a recognised directive.
+      # The floor and the hold keep a single report, which any client can send, from opening a ticket.
+      - alert: CSPUnknownDirective
+        expr: sum by (site) (increase(foomo_csr_site_violations_total{directive="unknown"}[1h])) > 5
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: CSP reports of site {{ $labels.site }} with an unknown directive
+
+      - alert: CSPReporterRateLimited
+        expr: sum by (job) (increase(foomo_csr_requests_rejected_total{reason="rate_limited"}[10m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: csp-reporter answered requests with 429
+
+      - alert: CSPReporterOverloaded
+        expr: sum by (job) (increase(foomo_csr_requests_rejected_total{reason="overloaded"}[10m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: csp-reporter answered large uploads with 503
+
+      - alert: CSPReporterBatchCap
+        expr: sum by (job) (increase(foomo_csr_reports_dropped_total{reason="batch_cap"}[10m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: csp-reporter dropped reports beyond the per-request cap
+
+      - alert: CSPReporterPanics
+        expr: sum by (job) (increase(foomo_csr_panics_recovered_total[10m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: csp-reporter recovered from a panic

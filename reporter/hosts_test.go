@@ -383,7 +383,7 @@ func TestHandlerSiteLabel(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"stage", "prod", "other"} {
-		if want := (len(cspDirectives) + 1) * 2; series[name] != want {
+		if want := (len(cspDirectives) + 1) * len(dispositions); series[name] != want {
 			t.Errorf("site_violations_total has %d series for site %q after NewHandler, want %d", series[name], name, want)
 		}
 	}
@@ -392,7 +392,7 @@ func TestHandlerSiteLabel(t *testing.T) {
 		"https://shop.example.com/":                   "prod",
 		"https://elsewhere.example/":                  "other",
 	} {
-		counter := siteViolationsCount.WithLabelValues(want, "font-src", "enforce")
+		counter := siteViolationsCount.WithLabelValues(want, "font-src", "unknown")
 		before := testutil.ToFloat64(counter)
 		body := `{"csp-report":{"document-uri":"` + uri + `","violated-directive":"font-src","blocked-uri":"data"}}`
 		handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))

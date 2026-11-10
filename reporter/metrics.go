@@ -34,6 +34,7 @@ const (
 	rejectMethodNotAllowed    = "method_not_allowed"
 	rejectReadError           = "read_error"
 	rejectUnsupportedEncoding = "unsupported_encoding"
+	rejectOverloaded          = "overloaded"
 
 	sourceEffectiveDirective = "effective_directive"
 	sourceViolatedDirective  = "violated_directive"
@@ -142,13 +143,13 @@ var (
 // httpSeries are the method and code pairs the handler can produce.
 var httpSeries = [][2]string{
 	{http.MethodOptions, "204"}, {http.MethodPost, "204"}, {http.MethodPost, "400"}, {http.MethodPost, "413"},
-	{http.MethodPost, "415"}, {http.MethodPost, "429"}, {http.MethodPost, "500"}, {http.MethodGet, "200"},
+	{http.MethodPost, "415"}, {http.MethodPost, "429"}, {http.MethodPost, "500"}, {http.MethodPost, "503"}, {http.MethodGet, "200"},
 	{methodOther, "405"},
 }
 
 var noiseReasons = []string{dropNoiseExtension, dropNoiseScheme, dropNoiseLocalhost, dropNoiseOperatorDomain}
 
-var dispositions = []string{"enforce", "report"}
+var dispositions = []string{"enforce", "report", "unknown"}
 
 var reportFormats = []string{formatLegacy, formatReportingAPIArray, formatReportingAPIObject}
 
@@ -156,7 +157,7 @@ var browsers = []string{"chrome", "firefox", "safari", "edge", "other"}
 
 var rejectReasons = []string{
 	rejectBodyTooLarge, rejectMalformedJSON, rejectUnknownShape, rejectMethodNotAllowed, rejectReadError,
-	rejectUnsupportedEncoding, rejectRateLimited,
+	rejectUnsupportedEncoding, rejectRateLimited, rejectOverloaded,
 }
 
 var blockedKinds = []string{
@@ -183,7 +184,7 @@ func init() {
 		requestsRejectedCount.WithLabelValues(reason)
 	}
 	for _, kind := range blockedKinds {
-		for _, disposition := range []string{"enforce", "report"} {
+		for _, disposition := range dispositions {
 			blockedKindCount.WithLabelValues(kind, disposition)
 		}
 	}

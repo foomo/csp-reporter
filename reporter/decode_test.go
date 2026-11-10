@@ -9,7 +9,7 @@ import (
 
 // TestDecodeParity pins status and metrics per body shape, so decoder changes cannot shift them silently.
 func TestDecodeParity(t *testing.T) {
-	valid := `{"type":"csp-violation","body":{"documentURL":"https://www.globus.ch/","effectiveDirective":"img-src",` +
+	valid := `{"type":"csp-violation","body":{"documentURL":"https://shop.example.com/","effectiveDirective":"img-src",` +
 		`"blockedURL":"https://example.com/x.png","disposition":"enforce"}}`
 	deprecation := `{"type":"deprecation","body":{"id":"x"}}`
 	var mixed []string
@@ -31,7 +31,7 @@ func TestDecodeParity(t *testing.T) {
 	}{
 		{
 			name: "legacy object",
-			body: `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src",` +
+			body: `{"csp-report":{"document-uri":"https://shop.example.com/","violated-directive":"img-src",` +
 				`"blocked-uri":"data","disposition":"report"}}`,
 			code: http.StatusNoContent,
 			want: snapshot{
@@ -77,6 +77,12 @@ func TestDecodeParity(t *testing.T) {
 		{
 			name: "array of strings",
 			body: `["x"]`,
+			code: http.StatusBadRequest,
+			want: snapshot{"http/POST/400": 1, "rejected/unknown_shape": 1},
+		},
+		{
+			name: "legacy object with only a source location",
+			body: `{"csp-report":{"source-file":"https://shop.example.com/a.js","line-number":5,"column-number":2}}`,
 			code: http.StatusBadRequest,
 			want: snapshot{"http/POST/400": 1, "rejected/unknown_shape": 1},
 		},
@@ -130,7 +136,7 @@ func TestDecodeParity(t *testing.T) {
 		{name: "not JSON", body: `not json`, code: http.StatusBadRequest, want: snapshot{"http/POST/400": 1, "rejected/malformed_json": 1}},
 		{
 			name: "truncated JSON",
-			body: `[{"type":"csp-violation","body":{"documentURL":"https://www.globus.ch/"`,
+			body: `[{"type":"csp-violation","body":{"documentURL":"https://shop.example.com/"`,
 			code: http.StatusBadRequest,
 			want: snapshot{"http/POST/400": 1, "rejected/malformed_json": 1},
 		},
@@ -154,13 +160,13 @@ func TestDecodeParity(t *testing.T) {
 		},
 		{
 			name: "duplicate keys in a batch entry",
-			body: `[{"type":"deprecation","type":"csp-violation","body":{"documentURL":"https://www.globus.ch/",` +
-				`"effectiveDirective":"img-src","blockedURL":"data"},"body":{"documentURL":"https://www.globus.ch/",` +
+			body: `[{"type":"deprecation","type":"csp-violation","body":{"documentURL":"https://shop.example.com/",` +
+				`"effectiveDirective":"img-src","blockedURL":"data"},"body":{"documentURL":"https://shop.example.com/",` +
 				`"effectiveDirective":"img-src","blockedURL":"blob"}}]`,
 			code: http.StatusNoContent,
 			want: snapshot{
 				"http/POST/204": 1, "received/reporting-api-array": 1, "browser/other/reporting-api-array": 1,
-				"directive": 1, "source/effective_directive": 1, "blocked/blob/enforce": 1,
+				"directive": 1, "source/effective_directive": 1, "blocked/blob/unknown": 1,
 			},
 		},
 		{
@@ -170,16 +176,16 @@ func TestDecodeParity(t *testing.T) {
 			code: http.StatusNoContent,
 			want: snapshot{
 				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1, "source/violated_directive": 1,
-				"blocked/inline/enforce": 1,
+				"blocked/inline/unknown": 1,
 			},
 		},
 		{
 			name: "invalid UTF-8 in a string",
-			body: "{\"csp-report\":{\"document-uri\":\"https://www.globus.ch/\xff\",\"violated-directive\":\"img-src\",\"blocked-uri\":\"eval\"}}",
+			body: "{\"csp-report\":{\"document-uri\":\"https://shop.example.com/\xff\",\"violated-directive\":\"img-src\",\"blocked-uri\":\"eval\"}}",
 			code: http.StatusNoContent,
 			want: snapshot{
 				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1, "source/violated_directive": 1,
-				"blocked/eval/enforce": 1,
+				"blocked/eval/unknown": 1,
 			},
 		},
 		{

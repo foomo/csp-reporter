@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
-const testOrigin = "https://www.globus.ch"
+const testOrigin = "https://shop.example.com"
 
 func serve(t *testing.T, method, contentType, body string) (*httptest.ResponseRecorder, *observer.ObservedLogs) {
 	t.Helper()
@@ -62,7 +62,7 @@ func TestHandlerPreflight(t *testing.T) {
 }
 
 func TestHandlerLegacyReport(t *testing.T) {
-	body := `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src https:",` +
+	body := `{"csp-report":{"document-uri":"https://shop.example.com/","violated-directive":"img-src https:",` +
 		`"effective-directive":"img-src","blocked-uri":"http://evil.example/x.png","disposition":"enforce"}}`
 	rec, logs := serve(t, http.MethodPost, "application/csp-report", body)
 	if rec.Code != http.StatusNoContent {
@@ -84,13 +84,13 @@ func TestHandlerReportingAPIBatch(t *testing.T) {
 	counter := violatedDirectivesCount.WithLabelValues("style-src-attr", "report")
 	before := counterValue(t, counter)
 	body := `[
-	  {"type":"deprecation","age":1,"url":"https://www.globus.ch/","user_agent":"Chrome","body":{"id":"x"}},
-	  {"type":"csp-violation","age":2,"url":"https://www.globus.ch/damen","user_agent":"Chrome/156",
-	   "body":{"documentURL":"https://www.globus.ch/damen","blockedURL":"https://example.com/probe",
+	  {"type":"deprecation","age":1,"url":"https://shop.example.com/","user_agent":"Chrome","body":{"id":"x"}},
+	  {"type":"csp-violation","age":2,"url":"https://shop.example.com/damen","user_agent":"Chrome/156",
+	   "body":{"documentURL":"https://shop.example.com/damen","blockedURL":"https://example.com/probe",
 	   "effectiveDirective":"connect-src","originalPolicy":"default-src 'self'","disposition":"report",
 	   "statusCode":200,"sample":""}},
-	  {"type":"csp-violation","age":3,"url":"https://www.globus.ch/herren","user_agent":"Chrome/156",
-	   "body":{"documentURL":"https://www.globus.ch/herren","blockedURL":"inline",
+	  {"type":"csp-violation","age":3,"url":"https://shop.example.com/herren","user_agent":"Chrome/156",
+	   "body":{"documentURL":"https://shop.example.com/herren","blockedURL":"inline",
 	   "effectiveDirective":"style-src-attr","disposition":"report","statusCode":200}}
 	]`
 	rec, logs := serve(t, http.MethodPost, "application/reports+json", body)
@@ -102,7 +102,7 @@ func TestHandlerReportingAPIBatch(t *testing.T) {
 		t.Fatalf("logged %d reports, want 2 (the deprecation report is skipped)", len(reports))
 	}
 	want := map[string]interface{}{
-		"document-uri":        "https://www.globus.ch/damen",
+		"document-uri":        "https://shop.example.com/damen",
 		"blocked-uri":         "https://example.com/probe",
 		"effective-directive": "connect-src",
 		"violated-directive":  "connect-src",
@@ -125,11 +125,11 @@ func TestHandlerReportingAPIBatch(t *testing.T) {
 
 // A value of the wrong JSON type costs only that field, not the report or the rest of the batch.
 func TestHandlerMistypedFields(t *testing.T) {
-	valid := `{"type":"csp-violation","body":{"documentURL":"https://www.globus.ch/","effectiveDirective":"img-src"}}`
+	valid := `{"type":"csp-violation","body":{"documentURL":"https://shop.example.com/","effectiveDirective":"img-src"}}`
 	tests := map[string]string{
 		"mistyped field in a skipped entry": `[{"type":"x","body":{"statusCode":"200"}},` + valid + `]`,
 		"string body in a skipped entry":    `[{"type":"x","body":"oops"},` + valid + `]`,
-		"legacy status-code as string": `{"csp-report":{"document-uri":"https://www.globus.ch/",` +
+		"legacy status-code as string": `{"csp-report":{"document-uri":"https://shop.example.com/",` +
 			`"violated-directive":"img-src","status-code":"200"}}`,
 	}
 	for name, body := range tests {
@@ -139,10 +139,54 @@ func TestHandlerMistypedFields(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
 			}
 			reports := submitted(logs)
-			if len(reports) != 1 || reports[0]["document-uri"] != "https://www.globus.ch/" {
+			if len(reports) != 1 || reports[0]["document-uri"] != "https://shop.example.com/" {
 				t.Errorf("logged %v, want the one valid report", reports)
 			}
 		})
+	}
+}
+
+// A line or column number the int cannot hold is logged as 0; the fields sent after it still arrive.
+func TestHandlerSourceLocation(t *testing.T) {
+	tests := []struct {
+		value string
+		want  int64
+	}{
+		{"12", 12},
+		{"-3", -3},
+		{"0", 0},
+		{"null", 0},
+		{`"12"`, 0},
+		{"1.5", 0},
+		{"1e30", 0},
+		{"99999999999999999999", 0},
+		{"true", 0},
+		{"{}", 0},
+	}
+	for _, tt := range tests {
+		bodies := map[string]string{
+			"legacy": `{"csp-report":{"line-number":` + tt.value + `,"column-number":` + tt.value +
+				`,"document-uri":"https://shop.example.com/","violated-directive":"img-src","source-file":"https://shop.example.com/a.js?v=1"}}`,
+			"reporting-api": `[{"type":"csp-violation","body":{"lineNumber":` + tt.value + `,"columnNumber":` + tt.value +
+				`,"documentURL":"https://shop.example.com/","effectiveDirective":"img-src","sourceFile":"https://shop.example.com/a.js?v=1"}}]`,
+		}
+		for format, body := range bodies {
+			t.Run(format+" "+tt.value, func(t *testing.T) {
+				rec, logs := serve(t, http.MethodPost, "application/reports+json", body)
+				if rec.Code != http.StatusNoContent {
+					t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+				}
+				reports := submitted(logs)
+				if len(reports) != 1 {
+					t.Fatalf("logged %d reports, want 1", len(reports))
+				}
+				got := reports[0]
+				if got["line-number"] != tt.want || got["column-number"] != tt.want ||
+					got["source-file"] != "https://shop.example.com/a.js" || got["document-uri"] != "https://shop.example.com/" {
+					t.Errorf("logged %v, want line and column %d and the source file without its query", got, tt.want)
+				}
+			})
+		}
 	}
 }
 
@@ -169,7 +213,7 @@ func TestHandlerUnknownBatch(t *testing.T) {
 }
 
 func TestHandlerBatchCap(t *testing.T) {
-	entry := `{"type":"csp-violation","body":{"documentURL":"https://www.globus.ch/","effectiveDirective":"img-src"}}`
+	entry := `{"type":"csp-violation","body":{"documentURL":"https://shop.example.com/","effectiveDirective":"img-src"}}`
 	body := "[" + strings.Repeat(entry+",", maxReportsPerRequest+50) + entry + "]"
 	rec, logs := serve(t, http.MethodPost, "application/reports+json", body)
 	if rec.Code != http.StatusNoContent {
@@ -209,7 +253,7 @@ func TestHandlerOtherMethod(t *testing.T) {
 
 // Safari 27 sends one Reporting API report per request, labelled application/csp-report, no preflight.
 func TestHandlerSafariSingleReport(t *testing.T) {
-	body := `{"type":"csp-violation","url":"https://www.globus.ch/","body":{"documentURL":"https://www.globus.ch/",` +
+	body := `{"type":"csp-violation","url":"https://shop.example.com/","body":{"documentURL":"https://shop.example.com/",` +
 		`"disposition":"enforce","referrer":"","effectiveDirective":"script-src-elem",` +
 		`"blockedURL":"https://example.com:443/x.js","statusCode":200}}`
 	rec, logs := serve(t, http.MethodPost, "application/csp-report", body)
