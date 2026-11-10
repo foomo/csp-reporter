@@ -127,6 +127,13 @@ func TestMaxConcurrentUploads(t *testing.T) {
 	if got := takeSnapshot(t).delta(before)["bodyBytes"]; got != float64(len(largeReport)) {
 		t.Errorf("read %v body bytes, want all %d", got, len(largeReport))
 	}
+	before = takeSnapshot(t)
+	if rec, _ := postLength(handler, strings.Repeat(" ", maxBodyBytes+1), -1); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("unknown length over 1 MiB = %d, want 413", rec.Code)
+	}
+	if got := takeSnapshot(t).delta(before)["rejected/body_too_large"]; got != 1 {
+		t.Errorf("body_too_large grew by %v, want 1", got)
+	}
 	held[0]()
 }
 
