@@ -86,7 +86,7 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 			w.WriteHeader(http.StatusNoContent)
 		case http.MethodPost:
 			setCORSHeaders(w, r)
-			// Browsers never compress reports; a compressed body would only fail as malformed JSON.
+			// An encoded body is never decoded here, so it would otherwise fail later as malformed JSON.
 			if enc := strings.Join(r.Header.Values("Content-Encoding"), ","); enc != "" && !strings.EqualFold(strings.TrimSpace(enc), "identity") {
 				requestsRejectedCount.WithLabelValues(rejectUnsupportedEncoding).Inc()
 				http.Error(w, `{"message":"unsupported content encoding"}`, http.StatusUnsupportedMediaType)
