@@ -80,6 +80,12 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 			w.WriteHeader(http.StatusNoContent)
 		case http.MethodPost:
 			setCORSHeaders(w, r)
+			// Browsers never compress reports; a compressed body would only fail as malformed JSON.
+			if enc := strings.Join(r.Header.Values("Content-Encoding"), ","); enc != "" && !strings.EqualFold(strings.TrimSpace(enc), "identity") {
+				requestsRejectedCount.WithLabelValues(rejectUnsupportedEncoding).Inc()
+				http.Error(w, `{"message":"unsupported content encoding"}`, http.StatusUnsupportedMediaType)
+				return
+			}
 			// The server's own writer, so MaxBytesReader can still close the connection on overflow.
 			reports, stats, err := decodeReports(http.MaxBytesReader(rw, r.Body, maxBodyBytes))
 			requestBodyBytes.Observe(float64(stats.bodyBytes))

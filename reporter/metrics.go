@@ -21,11 +21,12 @@ const (
 	dropEmptyBody  = "empty_body"
 	dropBatchCap   = "batch_cap"
 
-	rejectBodyTooLarge     = "body_too_large"
-	rejectMalformedJSON    = "malformed_json"
-	rejectUnknownShape     = "unknown_shape"
-	rejectMethodNotAllowed = "method_not_allowed"
-	rejectReadError        = "read_error"
+	rejectBodyTooLarge        = "body_too_large"
+	rejectMalformedJSON       = "malformed_json"
+	rejectUnknownShape        = "unknown_shape"
+	rejectMethodNotAllowed    = "method_not_allowed"
+	rejectReadError           = "read_error"
+	rejectUnsupportedEncoding = "unsupported_encoding"
 
 	methodOther = "other"
 )
@@ -83,8 +84,15 @@ var (
 	})
 )
 
+// httpSeries are the method and code pairs the handler can produce.
+var httpSeries = [][2]string{
+	{http.MethodOptions, "204"}, {http.MethodPost, "204"}, {http.MethodPost, "400"}, {http.MethodPost, "413"},
+	{http.MethodPost, "415"}, {http.MethodGet, "200"}, {methodOther, "405"},
+}
+
 var rejectReasons = []string{
 	rejectBodyTooLarge, rejectMalformedJSON, rejectUnknownShape, rejectMethodNotAllowed, rejectReadError,
+	rejectUnsupportedEncoding,
 }
 
 var blockedKinds = []string{
@@ -93,10 +101,7 @@ var blockedKinds = []string{
 
 // Pre-create every series so dashboards show 0 instead of no data before the first event.
 func init() {
-	for _, mc := range [][2]string{
-		{http.MethodOptions, "204"}, {http.MethodPost, "204"}, {http.MethodPost, "400"},
-		{http.MethodPost, "413"}, {http.MethodGet, "200"}, {methodOther, "405"},
-	} {
+	for _, mc := range httpSeries {
 		httpRequestsCount.WithLabelValues(mc[0], mc[1])
 	}
 	for _, format := range []string{formatLegacy, formatReportingAPI} {

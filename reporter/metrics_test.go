@@ -54,11 +54,6 @@ func TestBlockedKind(t *testing.T) {
 	}
 }
 
-// httpSeries are the method and code pairs the handler can produce, all pre-initialised.
-var httpSeries = [][2]string{
-	{"OPTIONS", "204"}, {"POST", "204"}, {"POST", "400"}, {"POST", "413"}, {"GET", "200"}, {"other", "405"},
-}
-
 // startupFamilies is gathered before any test runs, so it shows only what the package itself creates.
 var startupFamilies []*dto.MetricFamily
 
@@ -299,6 +294,43 @@ func TestHandlerMetrics(t *testing.T) {
 					t.Errorf("last_report_timestamp_seconds = %v, want at least %v", ts, start)
 				}
 			}
+		})
+	}
+}
+
+func TestHandlerContentEncoding(t *testing.T) {
+	body := `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src","blocked-uri":"data"}}`
+	accepted := snapshot{
+		"http/POST/204": 1, "received/legacy": 1, "directive": 1, "blocked/data/enforce": 1,
+		"durations": 1, "bodies": 1, "bodyBytes": float64(len(body)),
+	}
+	// The body of a refused request is never read, so it adds no body size.
+	refused := snapshot{"http/POST/415": 1, "rejected/unsupported_encoding": 1, "durations": 1}
+	tests := []struct {
+		encodings []string
+		code      int
+		want      snapshot
+	}{
+		{nil, http.StatusNoContent, accepted},
+		{[]string{"identity"}, http.StatusNoContent, accepted},
+		{[]string{"Identity "}, http.StatusNoContent, accepted},
+		{[]string{"gzip"}, http.StatusUnsupportedMediaType, refused},
+		{[]string{"br"}, http.StatusUnsupportedMediaType, refused},
+		{[]string{"identity", "gzip"}, http.StatusUnsupportedMediaType, refused},
+	}
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.encodings, ","), func(t *testing.T) {
+			before := takeSnapshot(t)
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			for _, enc := range tt.encodings {
+				req.Header.Add("Content-Encoding", enc)
+			}
+			rec := httptest.NewRecorder()
+			NewHandler(zap.NewNop())(rec, req)
+			if rec.Code != tt.code {
+				t.Errorf("status = %d, want %d", rec.Code, tt.code)
+			}
+			checkDelta(t, takeSnapshot(t).delta(before), tt.want)
 		})
 	}
 }
