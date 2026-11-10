@@ -1,12 +1,12 @@
-FROM --platform=linux/amd64 golang as builder
+FROM golang:1.27.3-alpine AS builder
 
 WORKDIR /go/server
 
 COPY . .
 
-RUN GOARCH=amd64 GOOS=linux CGO_ENABLED=0 go build -o /server ./main.go
+RUN CGO_ENABLED=0 go build -o /server ./main.go
 
-FROM --platform=linux/amd64 alpine
+FROM alpine:3.24.4
 
 COPY --from=builder /server /usr/bin/server
 
