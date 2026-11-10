@@ -17,7 +17,7 @@ type fixedClock time.Time
 func (c fixedClock) Now() time.Time                         { return time.Time(c) }
 func (c fixedClock) NewTicker(d time.Duration) *time.Ticker { return time.NewTicker(d) }
 
-// goldenReportLine is the log line the handler wrote for parityLegacyReport before any option existed.
+// goldenReportLine pins the log line format of a handler without options for parityLegacyReport, without the site field.
 const goldenReportLine = `{"level":"info","ts":1793534400,"msg":"content security policy report submitted",` +
 	`"disposition":"enforce","document-uri":"https://shop.example.com/cart","referrer":"",` +
 	`"violated-directive":"img-src","effective-directive":"","original-policy":"img-src 'self'",` +
@@ -26,7 +26,7 @@ const goldenReportLine = `{"level":"info","ts":1793534400,"msg":"content securit
 const parityLegacyReport = `{"csp-report":{"document-uri":"https://shop.example.com/cart?x=1","violated-directive":"img-src",` +
 	`"original-policy":"img-src 'self'","blocked-uri":"https://cdn.example.net/x.png","status-code":200}}`
 
-// A handler without options answers and counts exactly as the handler did before options existed.
+// A handler without options keeps the pinned status codes and metric deltas.
 func TestDefaultHandlerParity(t *testing.T) {
 	report := func(directive, blocked string) string {
 		return `{"type":"csp-violation","body":{"documentURL":"https://shop.example.com/","effectiveDirective":"` +
@@ -101,7 +101,7 @@ func TestDefaultHandlerParity(t *testing.T) {
 	}
 }
 
-// The report log line of a handler without options is the line written before options existed plus a trailing site.
+// The report log line of a handler without options is goldenReportLine plus a trailing site.
 func TestDefaultHandlerLogLine(t *testing.T) {
 	var buf bytes.Buffer
 	encoder := zap.NewProductionEncoderConfig()

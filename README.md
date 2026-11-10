@@ -71,7 +71,7 @@ A value the service cannot use (a negative or non-numeric rate, a malformed CIDR
 
 ### Sites
 
-`--site stage=*.stage.shop.example.com --site prod=shop.example.com,www.shop.example.com` labels each recorded report with a site name in `foomo_csr_site_violations_total` and in the `site` log field. The host of the report's `document-uri` is compared with each pattern:
+`--site 'stage=*.stage.shop.example.com' --site prod=shop.example.com,www.shop.example.com` labels each recorded report with a site name in `foomo_csr_site_violations_total` and in the `site` log field; quote wildcard patterns in a shell so it does not expand the `*`. The host of the report's `document-uri` is compared with each pattern:
 
 - A plain host such as `shop.example.com` matches only that host.
 - A pattern starting with `*.` matches every subdomain at any depth, on a label boundary, but not the host itself: `*.stage.shop.example.com` matches `www.node-a.stage.shop.example.com` and does not match `stage.shop.example.com`, `xstage.shop.example.com` or `a.stage.shop.example.com.evil.example`. `*` is allowed only as the whole leading label.
@@ -87,8 +87,8 @@ The site is taken from the report, which any client can forge, so it says where 
 `--rate-limit` and `--rate-limit-per-ip` are token buckets that refill at the given rate (fractions such as `0.5` are allowed) and hold up to twice the rate, at least 1. They apply to `POST` only and are checked before the body is read; a limited request gets `429` and counts in `foomo_csr_requests_rejected_total{reason="rate_limited"}`. The per-client limit is checked first, so a client over its own limit does not use up the global budget.
 
 - Browsers count a `429` as a failed delivery, and the service does not record the reports of a limited request. Set the limits well above normal traffic; they are meant to cap floods.
-- A client is an IPv4 address or an IPv6 `/64`. Up to 10000 clients are tracked per generation and two generations are kept; clients idle for a whole generation are forgotten and start with a full bucket again.
-- The client address is the TCP peer. Behind an ingress or load balancer every request comes from the proxy, so per-client limiting then needs `--trusted-proxies` covering every proxy hop: `X-Forwarded-For` is read only when the peer is in that list, and the client is the rightmost entry that is not. A malformed entry falls back to the peer address, so the forgeable entries to its left are never used. Without `--trusted-proxies` all clients behind a proxy share one bucket.
+- A client is an IPv4 address or an IPv6 `/64`. Up to 10000 clients are tracked per generation and two generations are kept; clients idle for a whole generation are forgotten and start with a full bucket again. A sender that controls more than 20000 addresses or `/64`s (one IPv6 `/48` holds 65536) can cycle through them faster than the table remembers, so per-client limiting assumes clients do not; set `--rate-limit` as well whenever `--rate-limit-per-ip` is set.
+- The client address is the TCP peer. Behind an ingress or load balancer every request comes from the proxy, so per-client limiting then needs `--trusted-proxies` covering every proxy hop: `X-Forwarded-For` is read only when the peer is in that list, and the client is the rightmost entry that is not. A malformed entry falls back to the peer address, so the forgeable entries to its left are never used. Without `--trusted-proxies` all clients behind a proxy share one bucket. Give IPv4 proxies in IPv4 form; an IPv4-mapped IPv6 entry such as `::ffff:10.0.0.0/104` is rejected.
 
 ### Noise filter
 
