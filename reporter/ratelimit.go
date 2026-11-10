@@ -17,7 +17,7 @@ type tokenBucket struct {
 	last   time.Time
 }
 
-// refill starts a new bucket full, and ignores a clock that goes backwards.
+// refill starts a new bucket full; a clock step backwards adds no tokens and refill resumes from the new time.
 func (b *tokenBucket) refill(now time.Time, rate float64) {
 	burst := max(1, 2*rate)
 	if b.last.IsZero() {
@@ -54,9 +54,10 @@ func (l *rateLimiter) allow(r *http.Request) bool {
 	if l.clientRate > 0 {
 		key = clientKey(clientAddr(r.RemoteAddr, r.Header.Values("X-Forwarded-For"), l.trusted))
 	}
-	now := l.now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// Read under the lock so buckets see timestamps in order; a stale one would rewind last and refill twice.
+	now := l.now()
 	var client *tokenBucket
 	if l.clientRate > 0 {
 		// Checked first, so a client over its own limit does not spend the global budget.

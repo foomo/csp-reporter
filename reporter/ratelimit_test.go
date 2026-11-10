@@ -256,6 +256,37 @@ func TestClientTableRotation(t *testing.T) {
 	}
 }
 
+// Parallel requests on a moving clock stay within burst + rate × elapsed, so no interval is refilled twice.
+func TestRateLimiterConcurrentMovingClock(t *testing.T) {
+	clock := newTestClock()
+	start := clock.now()
+	tick := func() time.Time {
+		clock.advance(time.Millisecond)
+		return clock.now()
+	}
+	l := newRateLimiter(options{now: tick, rate: 50, clientRate: 50})
+	var allowed atomic.Int64
+	var wg sync.WaitGroup
+	for g := 0; g < 64; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				r := httptest.NewRequest(http.MethodPost, "/", nil)
+				r.RemoteAddr = "192.0.2.1:1000"
+				if l.allow(r) {
+					allowed.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	bound := int64(100 + 50*clock.now().Sub(start).Seconds())
+	if got := allowed.Load(); got > bound {
+		t.Errorf("allowed %d requests, bound %d", got, bound)
+	}
+}
+
 // Run with -race: parallel requests on one limiter never exceed the burst while the clock stands still.
 func TestRateLimiterConcurrent(t *testing.T) {
 	clock := newTestClock()
