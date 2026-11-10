@@ -1,0 +1,55 @@
+name: ❓ Question
+description: Ask a question about usage or clarification
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for your question! Please provide as much detail as possible so we can help you effectively.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Prerequisites
+      description: Please confirm the following before submitting
+      options:
+        - label: I have checked the README
+          required: true
+        - label: I have searched existing issues for similar questions
+          required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your Question
+      description: What would you like to know?
+      placeholder: Please be as specific as possible
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What are you trying to accomplish?
+      placeholder: Describe your setup, e.g., version or image tag, how it is deployed, which report format your pages send
+    validations:
+      required: false
+
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What I've Tried
+      description: What have you already attempted?
+      placeholder: Describe any solutions you've already explored
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Information
+      description: Any other details, requests, log lines, or metrics that might be helpful
+    validations:
+      required: false
