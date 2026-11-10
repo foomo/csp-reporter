@@ -1,16 +1,25 @@
 package reporter
 
 import (
+	"fmt"
+	"io"
 	"math"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestBlockedKind(t *testing.T) {
@@ -50,11 +59,6 @@ func TestBlockedKind(t *testing.T) {
 	}
 }
 
-// httpSeries are the method and code pairs the handler can produce, all pre-initialised.
-var httpSeries = [][2]string{
-	{"OPTIONS", "204"}, {"POST", "204"}, {"POST", "400"}, {"POST", "413"}, {"GET", "200"}, {"other", "405"},
-}
-
 // startupFamilies is gathered before any test runs, so it shows only what the package itself creates.
 var startupFamilies []*dto.MetricFamily
 
@@ -69,10 +73,15 @@ func TestMain(m *testing.M) {
 func TestMetricsPreinitialised(t *testing.T) {
 	want := map[string]int{
 		"foomo_csr_http_requests_total":     len(httpSeries),
-		"foomo_csr_reports_received_total":  2,
+		"foomo_csr_reports_received_total":  len(reportFormats),
 		"foomo_csr_reports_dropped_total":   3,
-		"foomo_csr_requests_rejected_total": 4,
+		"foomo_csr_requests_rejected_total": len(rejectReasons),
 		"foomo_csr_blocked_kind_total":      len(blockedKinds) * 2,
+		"foomo_csr_directive_source_total":  len(directiveSources),
+		"foomo_csr_browser_reports_total":   len(browsers) * len(reportFormats),
+		"foomo_csr_panics_recovered_total":  1,
+		"foomo_csr_http_requests_in_flight": 1,
+		"foomo_csr_reports_per_request":     1,
 	}
 	for _, mf := range startupFamilies {
 		n, ok := want[mf.GetName()]
@@ -103,14 +112,20 @@ func takeSnapshot(t *testing.T) snapshot {
 	for _, mc := range httpSeries {
 		s["http/"+mc[0]+"/"+mc[1]] = testutil.ToFloat64(httpRequestsCount.WithLabelValues(mc[0], mc[1]))
 	}
-	for _, f := range []string{formatLegacy, formatReportingAPI} {
+	for _, f := range reportFormats {
 		s["received/"+f] = testutil.ToFloat64(reportsReceivedCount.WithLabelValues(f))
+		for _, b := range browsers {
+			s["browser/"+b+"/"+f] = testutil.ToFloat64(browserReportsCount.WithLabelValues(b, f))
+		}
 	}
 	for _, r := range []string{dropNonCSPType, dropEmptyBody, dropBatchCap} {
 		s["dropped/"+r] = testutil.ToFloat64(reportsDroppedCount.WithLabelValues(r))
 	}
-	for _, r := range []string{rejectBodyTooLarge, rejectMalformedJSON, rejectUnknownShape, rejectMethodNotAllowed} {
+	for _, r := range rejectReasons {
 		s["rejected/"+r] = testutil.ToFloat64(requestsRejectedCount.WithLabelValues(r))
+	}
+	for _, src := range directiveSources {
+		s["source/"+src] = testutil.ToFloat64(directiveSourceCount.WithLabelValues(src))
 	}
 	for _, k := range blockedKinds {
 		for _, d := range []string{"enforce", "report"} {
@@ -122,6 +137,11 @@ func takeSnapshot(t *testing.T) snapshot {
 	bodies := histogram(t, requestBodyBytes)
 	s["bodies"] = float64(bodies.GetSampleCount())
 	s["bodyBytes"] = bodies.GetSampleSum()
+	perRequest := histogram(t, reportsPerRequest)
+	s["perRequest"] = float64(perRequest.GetSampleCount())
+	s["perRequestSum"] = perRequest.GetSampleSum()
+	s["panics"] = testutil.ToFloat64(panicsRecoveredCount)
+	s["inFlight"] = testutil.ToFloat64(httpRequestsInFlight)
 	return s
 }
 
@@ -134,6 +154,46 @@ func (s snapshot) delta(before snapshot) snapshot {
 		}
 	}
 	return d
+}
+
+// addAccepted adds what every accepted POST records besides its reports: one batch size observation.
+func addAccepted(want snapshot) {
+	want["perRequest"] = 1
+	for _, f := range reportFormats {
+		want["perRequestSum"] += want["received/"+f]
+	}
+}
+
+// checkDelta fails for every series that did not grow by exactly what want says.
+func checkDelta(t *testing.T, got, want snapshot) {
+	t.Helper()
+	for k := range want {
+		if got[k] != want[k] {
+			t.Errorf("%s grew by %v, want %v", k, got[k], want[k])
+		}
+	}
+	for k, v := range got {
+		if _, ok := want[k]; !ok {
+			t.Errorf("%s grew by %v, want 0", k, v)
+		}
+	}
+	var received, browsed, sources float64
+	for _, f := range reportFormats {
+		received += got["received/"+f]
+		for _, b := range browsers {
+			browsed += got["browser/"+b+"/"+f]
+		}
+	}
+	// Recorded reports are the received ones minus those beyond the cap.
+	if got["directive"] != received-got["dropped/batch_cap"] {
+		t.Errorf("recorded %v reports, received %v and capped %v", got["directive"], received, got["dropped/batch_cap"])
+	}
+	for _, src := range directiveSources {
+		sources += got["source/"+src]
+	}
+	if sources != got["directive"] || browsed != got["directive"] {
+		t.Errorf("recorded %v reports, %v directive sources and %v browser reports", got["directive"], sources, browsed)
+	}
 }
 
 func sumCounters(t *testing.T, c prometheus.Collector) float64 {
@@ -184,7 +244,30 @@ func TestHandlerMetrics(t *testing.T) {
 			method: http.MethodPost,
 			body: `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src",` +
 				`"blocked-uri":"data","disposition":"report"}}`,
-			want: snapshot{"http/POST/204": 1, "received/legacy": 1, "directive": 1, "blocked/data/report": 1},
+			want: snapshot{
+				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1,
+				"source/violated_directive": 1, "blocked/data/report": 1,
+			},
+		},
+		{
+			name:   "legacy report-only report with a fallback violated directive",
+			method: http.MethodPost,
+			body: `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"default-src 'self'",` +
+				`"effective-directive":"img-src","blocked-uri":"data","disposition":"reporting"}}`,
+			want: snapshot{
+				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1,
+				"source/effective_directive": 1, "blocked/data/report": 1,
+			},
+		},
+		{
+			name:   "Reporting API report naming its browser",
+			method: http.MethodPost,
+			body: `[{"type":"csp-violation","user_agent":"Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",` +
+				`"body":{"documentURL":"https://www.globus.ch/","effectiveDirective":"img-src","blockedURL":"data"}}]`,
+			want: snapshot{
+				"http/POST/204": 1, "received/reporting-api-array": 1, "browser/firefox/reporting-api-array": 1,
+				"directive": 1, "source/effective_directive": 1, "blocked/data/enforce": 1,
+			},
 		},
 		{
 			name:   "mixed Reporting API batch",
@@ -198,8 +281,9 @@ func TestHandlerMetrics(t *testing.T) {
 				valid("script-src", "eval", "enforce"),
 			}, ",") + "]",
 			want: snapshot{
-				"http/POST/204": 1, "received/reporting-api": 3, "dropped/non_csp_type": 2, "dropped/empty_body": 1,
-				"directive": 3, "blocked/https/enforce": 1, "blocked/inline/report": 1, "blocked/eval/enforce": 1,
+				"http/POST/204": 1, "received/reporting-api-array": 3, "dropped/non_csp_type": 2, "dropped/empty_body": 1,
+				"browser/other/reporting-api-array": 3, "directive": 3, "source/effective_directive": 3,
+				"blocked/https/enforce": 1, "blocked/inline/report": 1, "blocked/eval/enforce": 1,
 			},
 		},
 		{
@@ -207,15 +291,19 @@ func TestHandlerMetrics(t *testing.T) {
 			method: http.MethodPost,
 			body:   cappedBatch,
 			want: snapshot{
-				"http/POST/204": 1, "received/reporting-api": maxReportsPerRequest + 50, "dropped/batch_cap": 50,
-				"directive": maxReportsPerRequest, "blocked/https/enforce": maxReportsPerRequest,
+				"http/POST/204": 1, "received/reporting-api-array": maxReportsPerRequest + 50, "dropped/batch_cap": 50,
+				"browser/other/reporting-api-array": maxReportsPerRequest, "directive": maxReportsPerRequest, "source/effective_directive": maxReportsPerRequest,
+				"blocked/https/enforce": maxReportsPerRequest,
 			},
 		},
 		{
 			name:   "single Reporting API report",
 			method: http.MethodPost,
 			body:   valid("worker-src", "blob:https://www.globus.ch/1", "enforce"),
-			want:   snapshot{"http/POST/204": 1, "received/reporting-api": 1, "directive": 1, "blocked/blob/enforce": 1},
+			want: snapshot{
+				"http/POST/204": 1, "received/reporting-api-object": 1, "browser/other/reporting-api-object": 1,
+				"directive": 1, "source/effective_directive": 1, "blocked/blob/enforce": 1,
+			},
 		},
 		{
 			name:   "single non-CSP report",
@@ -266,30 +354,157 @@ func TestHandlerMetrics(t *testing.T) {
 				// An oversized body counts as the bytes read before the limit tripped.
 				tt.want["bodyBytes"] = math.Min(float64(len(tt.body)), maxBodyBytes)
 			}
+			if tt.want["http/POST/204"] == 1 {
+				addAccepted(tt.want)
+			}
 			start := float64(time.Now().Unix())
 			before := takeSnapshot(t)
 			serve(t, tt.method, "application/reports+json", tt.body)
 			got := takeSnapshot(t).delta(before)
-
-			for k := range tt.want {
-				if got[k] != tt.want[k] {
-					t.Errorf("%s grew by %v, want %v", k, got[k], tt.want[k])
-				}
-			}
-			for k, v := range got {
-				if _, ok := tt.want[k]; !ok {
-					t.Errorf("%s grew by %v, want 0", k, v)
-				}
-			}
-			// Recorded reports are the received ones minus those beyond the cap.
-			if received := got["received/legacy"] + got["received/reporting-api"]; got["directive"] != received-got["dropped/batch_cap"] {
-				t.Errorf("recorded %v reports, received %v and capped %v", got["directive"], received, got["dropped/batch_cap"])
-			}
+			checkDelta(t, got, tt.want)
 			if got["directive"] > 0 {
 				if ts := testutil.ToFloat64(lastReportTimestamp); ts < start {
 					t.Errorf("last_report_timestamp_seconds = %v, want at least %v", ts, start)
 				}
 			}
 		})
+	}
+}
+
+func TestHandlerContentEncoding(t *testing.T) {
+	body := `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src","blocked-uri":"data"}}`
+	accepted := snapshot{
+		"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1,
+		"source/violated_directive": 1, "blocked/data/enforce": 1, "durations": 1, "bodies": 1,
+		"bodyBytes": float64(len(body)),
+	}
+	addAccepted(accepted)
+	// The body of a refused request is never read, so it adds no body size.
+	refused := snapshot{"http/POST/415": 1, "rejected/unsupported_encoding": 1, "durations": 1}
+	tests := []struct {
+		encodings []string
+		code      int
+		want      snapshot
+	}{
+		{nil, http.StatusNoContent, accepted},
+		{[]string{"identity"}, http.StatusNoContent, accepted},
+		{[]string{"Identity "}, http.StatusNoContent, accepted},
+		{[]string{"gzip"}, http.StatusUnsupportedMediaType, refused},
+		{[]string{"br"}, http.StatusUnsupportedMediaType, refused},
+		{[]string{"identity", "gzip"}, http.StatusUnsupportedMediaType, refused},
+	}
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.encodings, ","), func(t *testing.T) {
+			before := takeSnapshot(t)
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			for _, enc := range tt.encodings {
+				req.Header.Add("Content-Encoding", enc)
+			}
+			rec := httptest.NewRecorder()
+			NewHandler(zap.NewNop())(rec, req)
+			if rec.Code != tt.code {
+				t.Errorf("status = %d, want %d", rec.Code, tt.code)
+			}
+			checkDelta(t, takeSnapshot(t).delta(before), tt.want)
+		})
+	}
+}
+
+// A recovered panic is answered with 500 and counted, instead of showing up as 200.
+func TestHandlerPanic(t *testing.T) {
+	var inFlight float64
+	core, _ := observer.New(zap.InfoLevel)
+	log := zap.New(core, zap.Hooks(func(e zapcore.Entry) error {
+		if e.Message == "content security policy report submitted" {
+			inFlight = testutil.ToFloat64(httpRequestsInFlight)
+			panic("boom")
+		}
+		return nil
+	}))
+	body := `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src","blocked-uri":"data"}}`
+	before := takeSnapshot(t)
+	rec := httptest.NewRecorder()
+	NewHandler(log)(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if inFlight < 1 {
+		t.Errorf("http_requests_in_flight = %v while handling, want at least 1", inFlight)
+	}
+	// Everything counted before the panic stays counted.
+	want := snapshot{
+		"http/POST/500": 1, "panics": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1,
+		"source/violated_directive": 1, "blocked/data/enforce": 1, "durations": 1, "bodies": 1,
+		"bodyBytes": float64(len(body)),
+	}
+	addAccepted(want)
+	checkDelta(t, takeSnapshot(t).delta(before), want)
+}
+
+func TestBrowserFamily(t *testing.T) {
+	tests := []struct{ userAgent, want string }{
+		{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36", "chrome"},
+		{"Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/126.0.6478.54 Mobile/15E148 Safari/604.1", "chrome"},
+		{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 OPR/111.0.0.0", "chrome"},
+		{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0", "edge"},
+		{"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36 EdgA/126.0.0.0", "edge"},
+		{"Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 EdgiOS/126.0.2592.56 Mobile/15E148 Safari/605.1.15", "edge"},
+		{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.102 Safari/537.36 Edge/18.19045", "edge"},
+		{"Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0", "firefox"},
+		{"Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/127.0 Mobile/15E148 Safari/605.1.15", "firefox"},
+		{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15", "safari"},
+		{"Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1", "safari"},
+		{"", "other"},
+		{"curl/8.7.1", "other"},
+	}
+	for _, tt := range tests {
+		if got := browserFamily(tt.userAgent); got != tt.want {
+			t.Errorf("browserFamily(%q) = %q, want %q", tt.userAgent, got, tt.want)
+		}
+	}
+}
+
+// A body that breaks off, for example on a timeout or disconnect, is not malformed JSON.
+func TestHandlerReadError(t *testing.T) {
+	before := takeSnapshot(t)
+	readErr := &net.OpError{
+		Op: "read", Net: "tcp",
+		Source: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 61754},
+		Addr:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 61756},
+		Err:    os.ErrDeadlineExceeded,
+	}
+	core, logs := observer.New(zap.InfoLevel)
+	req := httptest.NewRequest(http.MethodPost, "/", iotest.ErrReader(readErr))
+	rec := httptest.NewRecorder()
+	NewHandler(zap.New(core))(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	checkDelta(t, takeSnapshot(t).delta(before), snapshot{
+		"http/POST/400": 1, "rejected/read_error": 1, "durations": 1, "bodies": 1,
+	})
+	if logs.Len() != 1 {
+		t.Fatalf("got %d log entries, want 1", logs.Len())
+	}
+	entry := logs.All()[0]
+	line := fmt.Sprint(entry.Message, entry.ContextMap())
+	if strings.Contains(line, "127.0.0.1") || !strings.Contains(line, "timeout") {
+		t.Errorf("log line %q must name the timeout and no peer address", line)
+	}
+}
+
+func TestReadErrorCause(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{&net.OpError{Op: "read", Err: os.ErrDeadlineExceeded}, "timeout"},
+		{&net.OpError{Op: "read", Err: os.NewSyscallError("read", syscall.ECONNRESET)}, "reset"},
+		{io.ErrUnexpectedEOF, "other"},
+	}
+	for _, tt := range tests {
+		if got := readErrorCause(tt.err); got != tt.want {
+			t.Errorf("readErrorCause(%v) = %q, want %q", tt.err, got, tt.want)
+		}
 	}
 }

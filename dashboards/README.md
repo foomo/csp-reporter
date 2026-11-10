@@ -8,7 +8,7 @@
 - Violations by directive over time, and the top ten directives over the selected range.
 - Enforce versus report-only, and the `directive="unknown"` rate (a directive the reporter does not know, or a malformed report).
 - Recorded reports by blocked resource kind (`inline`, `eval`, `data`, `extension`, `https`, ...).
-- Share of legacy `report-uri` reports versus Reporting API reports over the selected range.
+- Share of legacy `report-uri` reports, Reporting API batches and single Reporting API reports over the selected range (`format` values `legacy`, `reporting-api-array`, `reporting-api-object`).
 - Rejected requests and dropped reports by reason, HTTP responses by method and status code.
 - Request duration p50/p95/p99 and request body size p95.
 - Goroutines, resident memory and uptime of every reporter instance.

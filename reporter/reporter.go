@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -52,6 +55,8 @@ type ContentSecurityPolicyReport struct {
 func NewHandler(log *zap.Logger) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		httpRequestsInFlight.Inc()
+		defer httpRequestsInFlight.Dec()
 		w := &statusRecorder{ResponseWriter: rw, code: http.StatusOK}
 		// Registered first so it runs after the recover below and sees the final status.
 		defer func() { observeRequest(r.Method, w.code, time.Since(start)) }()
@@ -66,7 +71,11 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 				default:
 					err = errors.New("unknown error")
 				}
+				panicsRecoveredCount.Inc()
 				log.With(zap.Error(err)).Error("Panic occurred in http handler")
+				if !w.written {
+					http.Error(w, `{"message":"internal error"}`, http.StatusInternalServerError)
+				}
 			}
 		}()
 
@@ -79,6 +88,12 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 			w.WriteHeader(http.StatusNoContent)
 		case http.MethodPost:
 			setCORSHeaders(w, r)
+			// An encoded body is never decoded here, so it would otherwise fail later as malformed JSON.
+			if enc := strings.Join(r.Header.Values("Content-Encoding"), ","); enc != "" && !strings.EqualFold(strings.TrimSpace(enc), "identity") {
+				requestsRejectedCount.WithLabelValues(rejectUnsupportedEncoding).Inc()
+				http.Error(w, `{"message":"unsupported content encoding"}`, http.StatusUnsupportedMediaType)
+				return
+			}
 			// The server's own writer, so MaxBytesReader can still close the connection on overflow.
 			reports, stats, err := decodeReports(http.MaxBytesReader(rw, r.Body, maxBodyBytes))
 			requestBodyBytes.Observe(float64(stats.bodyBytes))
@@ -90,8 +105,11 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 			}
 			if err != nil {
 				reason := rejectMalformedJSON
-				if errors.Is(err, errUnknownReport) {
+				switch {
+				case errors.Is(err, errUnknownReport):
 					reason = rejectUnknownShape
+				case errors.Is(err, errReadBody):
+					reason = rejectReadError
 				}
 				requestsRejectedCount.WithLabelValues(reason).Inc()
 				log.Warn("Could not deserialize request", zap.Error(err))
@@ -100,11 +118,11 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 			}
 			stats.record()
 			for _, report := range reports {
-				logReport(log, report, r.UserAgent())
+				logReport(log, report, r.UserAgent(), stats.format)
 			}
 			w.WriteHeader(http.StatusNoContent)
 		case "GET":
-			_, _ = w.Write([]byte("Welcome to CSV Reporter"))
+			_, _ = w.Write([]byte("Welcome to CSP Reporter"))
 		default:
 			requestsRejectedCount.WithLabelValues(rejectMethodNotAllowed).Inc()
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -113,15 +131,27 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 }
 
 func AffectedDirective(cspr ContentSecurityPolicyReport) string {
-	parts := strings.Split(cspr.ViolatedDirective, " ")
-	directive := parts[0]
-
-	// Check if we support metrics for that directive
-	if _, ok := cspDirectives[directive]; !ok {
-		return unknownDirective
-	}
-
+	directive, _ := directiveWithSource(cspr)
 	return directive
+}
+
+// directiveWithSource prefers the effective directive, as a legacy violated-directive may name the default-src fallback.
+func directiveWithSource(cspr ContentSecurityPolicyReport) (directive, source string) {
+	if d, _, _ := strings.Cut(cspr.EffectiveDirective, " "); isKnownDirective(d) {
+		return d, sourceEffectiveDirective
+	}
+	if d, _, _ := strings.Cut(cspr.ViolatedDirective, " "); isKnownDirective(d) {
+		return d, sourceViolatedDirective
+	}
+	if cspr.EffectiveDirective == "" && cspr.ViolatedDirective == "" {
+		return unknownDirective, sourceMissing
+	}
+	return unknownDirective, sourceUnrecognised
+}
+
+func isKnownDirective(directive string) bool {
+	_, ok := cspDirectives[directive]
+	return ok
 }
 
 // maxBodyBytes caps one request; a Reporting API batch of CSP reports stays far below it.
@@ -172,8 +202,14 @@ type receivedReport struct {
 // errUnknownReport is returned for JSON that is neither a legacy nor a Reporting API CSP report.
 var errUnknownReport = errors.New("body is not a CSP report")
 
+// errMalformedJSON is returned for a body that is not one valid JSON document.
+var errMalformedJSON = errors.New("body is not valid JSON")
+
 // errBodyTooLarge is returned for a body over maxBodyBytes.
 var errBodyTooLarge = errors.New("request body too large")
+
+// errReadBody is returned when the body cannot be read, for example after a timeout or disconnect.
+var errReadBody = errors.New("could not read request body")
 
 // unmarshalLenient ignores values of the wrong JSON type: encoding/json skips them and still
 // fills every other field, so one mistyped field does not cost the report or the whole batch.
@@ -201,18 +237,37 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 		if errors.As(err, &maxBytesErr) {
 			return nil, stats, errBodyTooLarge
 		}
-		return nil, stats, err
+		// Only a fixed cause: the network error's text names the peer's address, which is never logged.
+		return nil, stats, fmt.Errorf("%w: %s", errReadBody, readErrorCause(err))
 	}
 	trimmed := bytes.TrimLeft(data, " \t\r\n")
-	if len(trimmed) > 0 && trimmed[0] == '[' {
-		var batch []ReportingAPIReport
-		if err := unmarshalLenient(trimmed, &batch); err != nil {
+	if !json.Valid(trimmed) {
+		return nil, stats, errMalformedJSON
+	}
+	if trimmed[0] == '[' {
+		stats.format = formatReportingAPIArray
+		// One entry at a time, so a huge batch costs no more memory than its largest entry.
+		dec := json.NewDecoder(bytes.NewReader(trimmed))
+		if _, err := dec.Token(); err != nil {
 			return nil, stats, err
 		}
-		stats.format = formatReportingAPI
 		var reports []receivedReport
-		typed := false
-		for _, entry := range batch {
+		var raw json.RawMessage
+		var entry ReportingAPIReport
+		entries, typed := 0, false
+		for dec.More() {
+			if err := dec.Decode(&raw); err != nil {
+				return nil, stats, err
+			}
+			entries++
+			// Reused rather than declared per entry, which would allocate once per entry.
+			entry = ReportingAPIReport{}
+			// Any other JSON value counts as an untyped entry, as decoding it into a struct would.
+			if raw[0] == '{' {
+				if err := unmarshalLenient(raw, &entry); err != nil {
+					return nil, stats, err
+				}
+			}
 			typed = typed || entry.Type != ""
 			switch {
 			case entry.Type != cspViolationReportType:
@@ -227,7 +282,7 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 				stats.batchCap++
 			}
 		}
-		if len(batch) > 0 && !typed {
+		if entries > 0 && !typed {
 			// Same answer as for a single unknown object.
 			return nil, stats, errUnknownReport
 		}
@@ -245,7 +300,7 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 		stats.format, stats.received = formatLegacy, 1
 		return []receivedReport{{CSP: single.CSP}}, stats, nil
 	case single.Type == cspViolationReportType && !single.Body.isEmpty():
-		stats.format, stats.received = formatReportingAPI, 1
+		stats.format, stats.received = formatReportingAPIObject, 1
 		return []receivedReport{fromReportingAPI(single.ReportingAPIReport)}, stats, nil
 	case single.Type == cspViolationReportType:
 		stats.emptyBody = 1
@@ -256,6 +311,18 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 		return nil, stats, nil
 	default:
 		return nil, stats, errUnknownReport
+	}
+}
+
+// readErrorCause classifies a body read error as timeout, reset or other.
+func readErrorCause(err error) string {
+	switch {
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, syscall.ECONNRESET):
+		return "reset"
+	default:
+		return "other"
 	}
 }
 
@@ -296,10 +363,11 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
-func logReport(log *zap.Logger, report receivedReport, requestUserAgent string) {
+func logReport(log *zap.Logger, report receivedReport, requestUserAgent, format string) {
 	csp := report.CSP
 	disposition := "enforce"
-	if csp.Disposition == "report" {
+	// CSP3 says "report" but MDN documents "reporting", so either one means report-only.
+	if csp.Disposition == "report" || csp.Disposition == "reporting" {
 		disposition = "report"
 	}
 	userAgent := report.UserAgent
@@ -308,20 +376,23 @@ func logReport(log *zap.Logger, report receivedReport, requestUserAgent string) 
 	}
 
 	// Increase Violated Directive (With Cardinality)
-	violatedDirectivesCount.WithLabelValues(AffectedDirective(csp), disposition).Inc()
+	directive, source := directiveWithSource(csp)
+	violatedDirectivesCount.WithLabelValues(directive, disposition).Inc()
+	directiveSourceCount.WithLabelValues(source).Inc()
 	blockedKindCount.WithLabelValues(blockedKind(csp.BlockedUri), disposition).Inc()
+	browserReportsCount.WithLabelValues(browserFamily(userAgent), format).Inc()
 	lastReportTimestamp.SetToCurrentTime()
 
 	log.Info("content security policy report submitted",
 		zap.String("disposition", disposition),
-		zap.String("document-uri", csp.DocumentUri),
-		zap.String("referrer", csp.Referrer),
-		zap.String("violated-directive", csp.ViolatedDirective),
-		zap.String("effective-directive", csp.EffectiveDirective),
-		zap.String("original-policy", csp.OriginalPolicy),
-		zap.String("blocked-uri", csp.BlockedUri),
-		zap.String("user-agent", userAgent),
-		zap.String("script-sample", csp.ScriptSample),
+		zap.String("document-uri", loggedURI(csp.DocumentUri)),
+		zap.String("referrer", loggedURI(csp.Referrer)),
+		zap.String("violated-directive", capBytes(csp.ViolatedDirective, maxLoggedPolicyBytes)),
+		zap.String("effective-directive", capBytes(csp.EffectiveDirective, maxLoggedPolicyBytes)),
+		zap.String("original-policy", capBytes(csp.OriginalPolicy, maxLoggedPolicyBytes)),
+		zap.String("blocked-uri", loggedURI(csp.BlockedUri)),
+		zap.String("user-agent", capBytes(userAgent, maxLoggedValueBytes)),
+		zap.String("script-sample", capRunes(csp.ScriptSample, maxLoggedSampleRunes)),
 		zap.Int("status-code", csp.StatusCode),
 	)
 }
