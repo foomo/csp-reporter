@@ -14,9 +14,10 @@ on:
 permissions:
   contents: read
 
+# non-PR runs get a unique group so every main commit and release publishes its image
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   docker:
