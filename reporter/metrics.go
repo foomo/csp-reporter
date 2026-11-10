@@ -150,7 +150,7 @@ func observeRequest(method string, code int, elapsed time.Duration) {
 }
 
 // blockedKind classifies a blocked URI, which is a CSP3 keyword (inline, eval, wasm-eval), a bare
-// scheme (Firefox sends "data" or "blob") or a URL.
+// scheme such as "data" or "blob", or a URL.
 func blockedKind(uri string) string {
 	if uri == "" {
 		return "empty"
