@@ -55,9 +55,9 @@ Every `POST` body is classified by its JSON shape, not its `Content-Type`:
 | `--address` | `:80` | CSP reports |
 | `--prometheus-address` | `:9200` | Prometheus metrics at `/metrics` (and every other path), and `200 ok` at `/healthz` |
 
-Server limits on the report listener: 5 s to read the request headers, 30 s to read the whole request, 30 s to write the response, 620 s before an idle keep-alive connection is closed (longer than the 600 s backend keep-alive of Google Cloud load balancers, so the load balancer closes first) and 16 KiB of request headers. A report upload that takes longer than 30 s is cut off. The metrics listener allows 5 s for the request headers and the same idle time, with no read or write limit for the body.
+Server limits on the report listener: 5 s to read the request headers, 30 s to read the whole request, 35 s to write the response (so a request cut off while its body is read still gets its `400`), 620 s before an idle keep-alive connection is closed (longer than the 600 s backend keep-alive of Google Cloud load balancers, so the load balancer closes first) and 16 KiB of request headers. A report upload that takes longer than 30 s is cut off. The metrics listener allows 5 s for the request headers, 10 s to read the whole request and the same idle time, with no limit for writing the response.
 
-On `SIGTERM` or `SIGINT` the service stops accepting connections, waits up to 10 s for requests in progress and exits with status 0; requests still running after 10 s are cut off and logged as a warning. If either listener fails, for example because its port is taken, both are shut down the same way and the service exits with status 1.
+On `SIGTERM` or `SIGINT` the service stops accepting connections, waits up to 10 s for requests in progress and exits with status 0; requests still running after 10 s are cut off and logged as a warning. A second signal during that wait ends the process at once with the signal's default behaviour. If either listener fails, for example because its port is taken, both are shut down the same way and the service exits with status 1.
 
 The Docker image `foomo/csp-reporter` runs the service with the defaults and exposes ports 80 and 9200 (the host ports below are examples):
 

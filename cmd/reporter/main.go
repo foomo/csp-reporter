@@ -33,6 +33,8 @@ func main() {
 	log.Info(fmt.Sprintf("Starting csp server listener on address %q\n", *reporterAddress))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Restores default signal handling once shutdown starts, so a second signal ends the drain at once.
+	context.AfterFunc(ctx, stop)
 	err := run(ctx, log, *reporterAddress, *prometheusAddress)
 	stop()
 	if err != nil {
@@ -50,7 +52,8 @@ func run(ctx context.Context, log *zap.Logger, reporterAddress, prometheusAddres
 		Handler:           reporter.NewHandler(log),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		// Above ReadTimeout, so a request cut off while its body is read still gets its 400.
+		WriteTimeout: 35 * time.Second,
 		// Above the 600 s backend keepalive of Google Cloud load balancers, so they close first.
 		IdleTimeout:    620 * time.Second,
 		MaxHeaderBytes: 16 << 10,
@@ -59,7 +62,9 @@ func run(ctx context.Context, log *zap.Logger, reporterAddress, prometheusAddres
 		Addr:              prometheusAddress,
 		Handler:           metricsHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       620 * time.Second,
+		// Bounds only reading the request, not writing a large scrape.
+		ReadTimeout: 10 * time.Second,
+		IdleTimeout: 620 * time.Second,
 	}
 
 	g, gctx := errgroup.WithContext(ctx)
