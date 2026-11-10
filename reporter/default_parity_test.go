@@ -101,7 +101,7 @@ func TestDefaultHandlerParity(t *testing.T) {
 	}
 }
 
-// The report log line of a handler without options matches the line written before options existed.
+// The report log line of a handler without options is the line written before options existed plus a trailing site.
 func TestDefaultHandlerLogLine(t *testing.T) {
 	var buf bytes.Buffer
 	encoder := zap.NewProductionEncoderConfig()
@@ -110,7 +110,8 @@ func TestDefaultHandlerLogLine(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(parityLegacyReport))
 	req.Header.Set("User-Agent", "request-agent")
 	NewHandler(log)(httptest.NewRecorder(), req)
-	if got := strings.TrimSuffix(buf.String(), "\n"); got != goldenReportLine {
-		t.Errorf("log line\n got %s\nwant %s", got, goldenReportLine)
+	want := strings.TrimSuffix(goldenReportLine, "}") + `,"site":"other"}`
+	if got := strings.TrimSuffix(buf.String(), "\n"); got != want {
+		t.Errorf("log line\n got %s\nwant %s", got, want)
 	}
 }

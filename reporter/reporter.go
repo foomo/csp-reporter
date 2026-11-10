@@ -52,7 +52,35 @@ type ContentSecurityPolicyReport struct {
 	ViolatedDirective  string `json:"violated-directive"`
 }
 
-func NewHandler(log *zap.Logger) http.HandlerFunc {
+// handler holds what the options turned on; a nil field is a feature that is off.
+type handler struct {
+	reportLog  *zap.Logger
+	limiter    *rateLimiter
+	noise      *noiseFilter
+	sites      *Sites
+	logLimiter *logLimiter
+}
+
+func NewHandler(log *zap.Logger, opts ...Option) http.HandlerFunc {
+	o := options{now: time.Now, reportLog: log}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	h := &handler{reportLog: o.reportLog, sites: o.sites}
+	if o.rate > 0 || o.clientRate > 0 {
+		h.limiter = newRateLimiter(o)
+	}
+	if o.dropNoise || o.dropHosts != nil {
+		h.noise = &noiseFilter{dropNoise: o.dropNoise, hosts: o.dropHosts}
+		for _, reason := range noiseReasons {
+			reportsDroppedCount.WithLabelValues(reason)
+		}
+	}
+	if o.logLimitPerKey > 0 {
+		h.logLimiter = newLogLimiter(o)
+	}
+	initSiteSeries(o.sites)
+
 	return func(rw http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		httpRequestsInFlight.Inc()
@@ -88,6 +116,11 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 			w.WriteHeader(http.StatusNoContent)
 		case http.MethodPost:
 			setCORSHeaders(w, r)
+			if h.limiter != nil && !h.limiter.allow(r) {
+				requestsRejectedCount.WithLabelValues(rejectRateLimited).Inc()
+				http.Error(w, `{"message":"too many requests"}`, http.StatusTooManyRequests)
+				return
+			}
 			// An encoded body is never decoded here, so it would otherwise fail later as malformed JSON.
 			if enc := strings.Join(r.Header.Values("Content-Encoding"), ","); enc != "" && !strings.EqualFold(strings.TrimSpace(enc), "identity") {
 				requestsRejectedCount.WithLabelValues(rejectUnsupportedEncoding).Inc()
@@ -95,7 +128,7 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 				return
 			}
 			// The server's own writer, so MaxBytesReader can still close the connection on overflow.
-			reports, stats, err := decodeReports(http.MaxBytesReader(rw, r.Body, maxBodyBytes))
+			reports, stats, err := decodeFilteredReports(http.MaxBytesReader(rw, r.Body, maxBodyBytes), h.noise)
 			requestBodyBytes.Observe(float64(stats.bodyBytes))
 			if errors.Is(err, errBodyTooLarge) {
 				requestsRejectedCount.WithLabelValues(rejectBodyTooLarge).Inc()
@@ -118,7 +151,7 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 			}
 			stats.record()
 			for _, report := range reports {
-				logReport(log, report, r.UserAgent(), stats.format)
+				h.logReport(report, r.UserAgent(), stats.format)
 			}
 			w.WriteHeader(http.StatusNoContent)
 		case "GET":
@@ -230,6 +263,11 @@ func unmarshalLenient(data []byte, v interface{}) error {
 // The JSON shape decides, not the Content-Type, because browsers label these inconsistently.
 // The stats count what was seen; only bodyBytes is meaningful when an error is returned.
 func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
+	return decodeFilteredReports(body, nil)
+}
+
+// decodeFilteredReports is decodeReports with noise dropped before the per-request cap, so noise takes no slot.
+func decodeFilteredReports(body io.Reader, noise *noiseFilter) ([]receivedReport, decodeStats, error) {
 	data, err := io.ReadAll(body)
 	stats := decodeStats{bodyBytes: len(data)}
 	if err != nil {
@@ -274,12 +312,16 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 				stats.nonCSPType++
 			case entry.Body.isEmpty():
 				stats.emptyBody++
-			case len(reports) < maxReportsPerRequest:
-				stats.received++
-				reports = append(reports, fromReportingAPI(entry))
 			default:
 				stats.received++
-				stats.batchCap++
+				report := fromReportingAPI(entry)
+				if reason := noise.reason(report.CSP); reason != "" {
+					stats.dropNoise(reason)
+				} else if len(reports) < maxReportsPerRequest {
+					reports = append(reports, report)
+				} else {
+					stats.batchCap++
+				}
 			}
 		}
 		if entries > 0 && !typed {
@@ -295,13 +337,12 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 	if err := unmarshalLenient(trimmed, &single); err != nil {
 		return nil, stats, err
 	}
+	var report receivedReport
 	switch {
 	case single.CSP != (ContentSecurityPolicyReport{}):
-		stats.format, stats.received = formatLegacy, 1
-		return []receivedReport{{CSP: single.CSP}}, stats, nil
+		stats.format, report = formatLegacy, receivedReport{CSP: single.CSP}
 	case single.Type == cspViolationReportType && !single.Body.isEmpty():
-		stats.format, stats.received = formatReportingAPIObject, 1
-		return []receivedReport{fromReportingAPI(single.ReportingAPIReport)}, stats, nil
+		stats.format, report = formatReportingAPIObject, fromReportingAPI(single.ReportingAPIReport)
 	case single.Type == cspViolationReportType:
 		stats.emptyBody = 1
 		return nil, stats, nil
@@ -312,6 +353,12 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 	default:
 		return nil, stats, errUnknownReport
 	}
+	stats.received = 1
+	if reason := noise.reason(report.CSP); reason != "" {
+		stats.dropNoise(reason)
+		return nil, stats, nil
+	}
+	return []receivedReport{report}, stats, nil
 }
 
 // readErrorCause classifies a body read error as timeout, reset or other.
@@ -363,7 +410,7 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
-func logReport(log *zap.Logger, report receivedReport, requestUserAgent, format string) {
+func (h *handler) logReport(report receivedReport, requestUserAgent, format string) {
 	csp := report.CSP
 	disposition := "enforce"
 	// CSP3 says "report" but MDN documents "reporting", so either one means report-only.
@@ -381,9 +428,20 @@ func logReport(log *zap.Logger, report receivedReport, requestUserAgent, format 
 	directiveSourceCount.WithLabelValues(source).Inc()
 	blockedKindCount.WithLabelValues(blockedKind(csp.BlockedUri), disposition).Inc()
 	browserReportsCount.WithLabelValues(browserFamily(userAgent), format).Inc()
+	site := h.sites.site(csp.DocumentUri)
+	siteViolationsCount.WithLabelValues(site, directive, disposition).Inc()
 	lastReportTimestamp.SetToCurrentTime()
 
-	log.Info("content security policy report submitted",
+	if h.logLimiter != nil {
+		key := strings.Join([]string{
+			directive, blockedKind(csp.BlockedUri), uriHost(csp.BlockedUri), redactURI(csp.DocumentUri), disposition,
+		}, "|")
+		if !h.logLimiter.allow(key) {
+			logLinesSuppressedCount.Inc()
+			return
+		}
+	}
+	h.reportLog.Info("content security policy report submitted",
 		zap.String("disposition", disposition),
 		zap.String("document-uri", loggedURI(csp.DocumentUri)),
 		zap.String("referrer", loggedURI(csp.Referrer)),
@@ -394,5 +452,6 @@ func logReport(log *zap.Logger, report receivedReport, requestUserAgent, format 
 		zap.String("user-agent", capBytes(userAgent, maxLoggedValueBytes)),
 		zap.String("script-sample", capRunes(csp.ScriptSample, maxLoggedSampleRunes)),
 		zap.Int("status-code", csp.StatusCode),
+		zap.String("site", site),
 	)
 }
