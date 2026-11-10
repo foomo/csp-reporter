@@ -41,8 +41,10 @@ groups:
           summary: No CSP reports for site {{ $labels.site }} for 6 hours
 
       # A directive the reporter does not know, or reports without a recognised directive.
+      # The floor and the hold keep a single report, which any client can send, from opening a ticket.
       - alert: CSPUnknownDirective
-        expr: sum by (site) (increase(foomo_csr_site_violations_total{directive="unknown"}[1h])) > 0
+        expr: sum by (site) (increase(foomo_csr_site_violations_total{directive="unknown"}[1h])) > 5
+        for: 30m
         labels:
           severity: ticket
         annotations:

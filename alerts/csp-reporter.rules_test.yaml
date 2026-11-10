@@ -22,7 +22,7 @@ tests:
             exp_annotations:
               summary: Enforced CSP violations of site prod spiked
 
-  # Without history: neither site existed a day earlier, so only the floor of 0.1 per second counts.
+  # Without history: neither site existed a day earlier, so only the absolute floor counts.
   - interval: 1m
     input_series:
       - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="prod",directive="img-src",disposition="enforce"}'
@@ -60,6 +60,26 @@ tests:
               site: prod
             exp_annotations:
               summary: No CSP reports for site prod for 6 hours
+
+  # Unknown directives: steady ones on prod alert after the hold; a single one on other never does.
+  - interval: 1m
+    input_series:
+      - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="prod",directive="unknown",disposition="enforce"}'
+        values: '0+1x120'
+      - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="other",directive="unknown",disposition="enforce"}'
+        values: '0x30 1x90'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CSPUnknownDirective
+        exp_alerts: []
+      - eval_time: 1h
+        alertname: CSPUnknownDirective
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              site: prod
+            exp_annotations:
+              summary: CSP reports of site prod with an unknown directive
 
   - interval: 1m
     input_series:
