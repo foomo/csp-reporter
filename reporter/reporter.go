@@ -1,8 +1,10 @@
 package reporter
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -64,36 +66,23 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 		}()
 
 		switch r.Method {
-		case "POST":
-			var report Report
-			err := json.NewDecoder(r.Body).Decode(&report)
+		case http.MethodOptions:
+			// CORS preflight: the Reporting API (Report-To / Reporting-Endpoints) posts
+			// application/reports+json cross-origin, which browsers preflight first.
+			setCORSHeaders(w, r)
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodPost:
+			setCORSHeaders(w, r)
+			reports, err := decodeReports(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 			if err != nil {
 				log.Warn("Could not deserialize request", zap.Error(err))
 				http.Error(w, `{"message":"bad request data"}`, http.StatusBadRequest)
+				return
 			}
-			disposition := "enforce"
-			if report.CSP.Disposition == "report" {
-				disposition = "report"
+			for _, report := range reports {
+				logReport(log, report, r.UserAgent())
 			}
-
-			// Increase Violated Directive (With Cardinality)
-			violatedDirectivesCount.WithLabelValues(AffectedDirective(report.CSP), disposition).Inc()
-
-			csp := report.CSP
-
-			log.Info("content security policy report submitted",
-				zap.String("disposition", disposition),
-				zap.String("document-uri", csp.DocumentUri),
-				zap.String("referrer", csp.Referrer),
-				zap.String("violated-directive", csp.ViolatedDirective),
-				zap.String("effective-directive", csp.EffectiveDirective),
-				zap.String("original-policy", csp.EffectiveDirective),
-				zap.String("blocked-uri", csp.BlockedUri),
-				zap.String("user-agent", r.UserAgent()),
-				zap.String("script-sample", csp.ScriptSample),
-				zap.Int("status-code", csp.StatusCode),
-			)
-
 			w.WriteHeader(http.StatusNoContent)
 		case "GET":
 			_, _ = w.Write([]byte("Welcome to CSV Reporter"))
@@ -113,4 +102,152 @@ func AffectedDirective(cspr ContentSecurityPolicyReport) string {
 	}
 
 	return directive
+}
+
+// maxBodyBytes caps one request; a Reporting API batch of CSP reports stays far below it.
+const maxBodyBytes = 1 << 20
+
+// cspViolationReportType is the Reporting API type of CSP reports. Browsers also send other types
+// (deprecation, intervention) to the endpoint named "default"; those are skipped.
+const cspViolationReportType = "csp-violation"
+
+// ReportingAPIReport is one entry of an application/reports+json batch (Reporting API).
+// https://www.w3.org/TR/reporting-1/#serialize-reports
+type ReportingAPIReport struct {
+	Type      string                 `json:"type"`
+	URL       string                 `json:"url"`
+	UserAgent string                 `json:"user_agent"`
+	Body      CSPViolationReportBody `json:"body"`
+}
+
+// CSPViolationReportBody is the body of a "csp-violation" report.
+// https://www.w3.org/TR/CSP3/#cspviolationreportbody
+type CSPViolationReportBody struct {
+	DocumentURL        string `json:"documentURL"`
+	Referrer           string `json:"referrer"`
+	BlockedURL         string `json:"blockedURL"`
+	EffectiveDirective string `json:"effectiveDirective"`
+	OriginalPolicy     string `json:"originalPolicy"`
+	Sample             string `json:"sample"`
+	Disposition        string `json:"disposition"`
+	StatusCode         int    `json:"statusCode"`
+}
+
+// receivedReport is a CSP report from either format, with the user agent the report names, if any.
+type receivedReport struct {
+	CSP       ContentSecurityPolicyReport
+	UserAgent string
+}
+
+// errUnknownReport is returned for JSON that is neither a legacy nor a Reporting API CSP report.
+var errUnknownReport = errors.New("body is not a CSP report")
+
+// decodeReports reads the three shapes browsers send:
+//   - legacy report-uri: {"csp-report": {...}} (Firefox, older browsers)
+//   - Reporting API batch: [{"type": "csp-violation", "body": {...}}, ...] (Chrome, application/reports+json)
+//   - one Reporting API report: {"type": "csp-violation", "body": {...}} (Safari, labelled application/csp-report)
+//
+// The JSON shape decides, not the Content-Type, because browsers label these inconsistently.
+func decodeReports(body io.Reader) ([]receivedReport, error) {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	trimmed := bytes.TrimLeft(data, " \t\r\n")
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var batch []ReportingAPIReport
+		if err := json.Unmarshal(trimmed, &batch); err != nil {
+			return nil, err
+		}
+		reports := make([]receivedReport, 0, len(batch))
+		for _, entry := range batch {
+			if entry.Type == cspViolationReportType {
+				reports = append(reports, fromReportingAPI(entry))
+			}
+		}
+		return reports, nil
+	}
+	var single struct {
+		ReportingAPIReport
+		CSP *ContentSecurityPolicyReport `json:"csp-report"`
+	}
+	if err := json.Unmarshal(trimmed, &single); err != nil {
+		return nil, err
+	}
+	switch {
+	case single.CSP != nil:
+		return []receivedReport{{CSP: *single.CSP}}, nil
+	case single.Type == cspViolationReportType:
+		return []receivedReport{fromReportingAPI(single.ReportingAPIReport)}, nil
+	case single.Type != "":
+		// Another Reporting API type sent to the same endpoint; nothing to record.
+		return nil, nil
+	default:
+		return nil, errUnknownReport
+	}
+}
+
+// fromReportingAPI maps a Reporting API "csp-violation" report to the legacy report fields.
+func fromReportingAPI(entry ReportingAPIReport) receivedReport {
+	b := entry.Body
+	documentURL := b.DocumentURL
+	if documentURL == "" {
+		documentURL = entry.URL
+	}
+	return receivedReport{
+		CSP: ContentSecurityPolicyReport{
+			BlockedUri:         b.BlockedURL,
+			Disposition:        b.Disposition,
+			DocumentUri:        documentURL,
+			EffectiveDirective: b.EffectiveDirective,
+			OriginalPolicy:     b.OriginalPolicy,
+			Referrer:           b.Referrer,
+			ScriptSample:       b.Sample,
+			StatusCode:         b.StatusCode,
+			// CSP3 reports name only the effective directive.
+			ViolatedDirective: b.EffectiveDirective,
+		},
+		UserAgent: entry.UserAgent,
+	}
+}
+
+// setCORSHeaders lets any page post reports: they are write-only, carry no credentials, and
+// legacy report-uri reports were never subject to CORS either.
+func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		origin = "*"
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Add("Vary", "Origin")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+}
+
+func logReport(log *zap.Logger, report receivedReport, requestUserAgent string) {
+	csp := report.CSP
+	disposition := "enforce"
+	if csp.Disposition == "report" {
+		disposition = "report"
+	}
+	userAgent := report.UserAgent
+	if userAgent == "" {
+		userAgent = requestUserAgent
+	}
+
+	// Increase Violated Directive (With Cardinality)
+	violatedDirectivesCount.WithLabelValues(AffectedDirective(csp), disposition).Inc()
+
+	log.Info("content security policy report submitted",
+		zap.String("disposition", disposition),
+		zap.String("document-uri", csp.DocumentUri),
+		zap.String("referrer", csp.Referrer),
+		zap.String("violated-directive", csp.ViolatedDirective),
+		zap.String("effective-directive", csp.EffectiveDirective),
+		zap.String("original-policy", csp.EffectiveDirective),
+		zap.String("blocked-uri", csp.BlockedUri),
+		zap.String("user-agent", userAgent),
+		zap.String("script-sample", csp.ScriptSample),
+		zap.Int("status-code", csp.StatusCode),
+	)
 }
