@@ -50,6 +50,9 @@ type ContentSecurityPolicyReport struct {
 	ScriptSample       string `json:"script-sample"`
 	StatusCode         int    `json:"status-code"`
 	ViolatedDirective  string `json:"violated-directive"`
+	SourceFile         string `json:"source-file"`
+	LineNumber         int    `json:"line-number"`
+	ColumnNumber       int    `json:"column-number"`
 }
 
 // handler holds what the options turned on; a nil field is a feature that is off.
@@ -218,6 +221,9 @@ type CSPViolationReportBody struct {
 	Sample             string `json:"sample"`
 	Disposition        string `json:"disposition"`
 	StatusCode         int    `json:"statusCode"`
+	SourceFile         string `json:"sourceFile"`
+	LineNumber         int    `json:"lineNumber"`
+	ColumnNumber       int    `json:"columnNumber"`
 }
 
 // isEmpty is true for a missing, null or mistyped body: every CSP violation names its document
@@ -392,6 +398,9 @@ func fromReportingAPI(entry ReportingAPIReport) receivedReport {
 			StatusCode:         b.StatusCode,
 			// CSP3 reports name only the effective directive.
 			ViolatedDirective: b.EffectiveDirective,
+			SourceFile:        b.SourceFile,
+			LineNumber:        b.LineNumber,
+			ColumnNumber:      b.ColumnNumber,
 		},
 		UserAgent: entry.UserAgent,
 	}
@@ -452,6 +461,9 @@ func (h *handler) logReport(report receivedReport, requestUserAgent, format stri
 		zap.String("user-agent", capBytes(userAgent, maxLoggedValueBytes)),
 		zap.String("script-sample", capRunes(csp.ScriptSample, maxLoggedSampleRunes)),
 		zap.Int("status-code", csp.StatusCode),
+		zap.String("source-file", loggedURI(csp.SourceFile)),
+		zap.Int("line-number", csp.LineNumber),
+		zap.Int("column-number", csp.ColumnNumber),
 		zap.String("site", site),
 	)
 }

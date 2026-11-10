@@ -21,10 +21,12 @@ func (c fixedClock) NewTicker(d time.Duration) *time.Ticker { return time.NewTic
 const goldenReportLine = `{"level":"info","ts":1793534400,"msg":"content security policy report submitted",` +
 	`"disposition":"enforce","document-uri":"https://shop.example.com/cart","referrer":"",` +
 	`"violated-directive":"img-src","effective-directive":"","original-policy":"img-src 'self'",` +
-	`"blocked-uri":"https://cdn.example.net/x.png","user-agent":"request-agent","script-sample":"","status-code":200}`
+	`"blocked-uri":"https://cdn.example.net/x.png","user-agent":"request-agent","script-sample":"","status-code":200,` +
+	`"source-file":"https://shop.example.com/app.js","line-number":12,"column-number":3}`
 
 const parityLegacyReport = `{"csp-report":{"document-uri":"https://shop.example.com/cart?x=1","violated-directive":"img-src",` +
-	`"original-policy":"img-src 'self'","blocked-uri":"https://cdn.example.net/x.png","status-code":200}}`
+	`"original-policy":"img-src 'self'","blocked-uri":"https://cdn.example.net/x.png","status-code":200,` +
+	`"source-file":"https://shop.example.com/app.js?v=1#x","line-number":12,"column-number":3}}`
 
 // A handler without options keeps the pinned status codes and metric deltas.
 func TestDefaultHandlerParity(t *testing.T) {

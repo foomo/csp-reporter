@@ -10,6 +10,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // These are Playwright-driven builds captured against localhost; they do not stand in for Safari or stock Firefox.
@@ -39,9 +40,20 @@ func TestBrowserFixtures(t *testing.T) {
 		{"playwright-webkit-27.2-report-uri-enforce-1.json", "application/csp-report", formatLegacy, "enforce", map[string]float64{"script-src-elem": 1}},
 		{"playwright-webkit-27.2-report-uri-report-only-1.json", "application/csp-report", formatLegacy, "enforce", map[string]float64{"script-src-elem": 1}},
 	}
-	handler := NewHandler(zap.NewNop())
+	// The first report's source location, as logged.
+	sourceLocations := map[string]map[string]interface{}{
+		"playwright-chromium-156.0.8078.4-report-to-enforce-1.json": {
+			"source-file": "https://localhost:55644/p1-enforce-both", "line-number": int64(1), "column-number": int64(61),
+		},
+		"playwright-firefox-157.0-report-uri-enforce-1.json": {
+			"source-file": "http://localhost:58099/p3-enforce-uri", "line-number": int64(1), "column-number": int64(60),
+		},
+	}
+	core, logs := observer.New(zap.InfoLevel)
+	handler := NewHandler(zap.New(core))
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
+			logs.TakeAll()
 			body, err := os.ReadFile(filepath.Join("testdata", tt.file))
 			if err != nil {
 				t.Fatal(err)
@@ -68,6 +80,17 @@ func TestBrowserFixtures(t *testing.T) {
 			}
 			if got["directive"] != want || got["received/"+tt.format] != want {
 				t.Errorf("recorded %v and received %v %s reports, want %v", got["directive"], got["received/"+tt.format], tt.format, want)
+			}
+			if location, ok := sourceLocations[tt.file]; ok {
+				reports := submitted(logs)
+				if len(reports) == 0 {
+					t.Fatal("no report logged")
+				}
+				for field, v := range location {
+					if reports[0][field] != v {
+						t.Errorf("%s = %v, want %v", field, reports[0][field], v)
+					}
+				}
 			}
 		})
 	}

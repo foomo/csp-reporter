@@ -146,6 +146,50 @@ func TestHandlerMistypedFields(t *testing.T) {
 	}
 }
 
+// A line or column number the int cannot hold is logged as 0; the fields sent after it still arrive.
+func TestHandlerSourceLocation(t *testing.T) {
+	tests := []struct {
+		value string
+		want  int64
+	}{
+		{"12", 12},
+		{"-3", -3},
+		{"0", 0},
+		{"null", 0},
+		{`"12"`, 0},
+		{"1.5", 0},
+		{"1e30", 0},
+		{"99999999999999999999", 0},
+		{"true", 0},
+		{"{}", 0},
+	}
+	for _, tt := range tests {
+		bodies := map[string]string{
+			"legacy": `{"csp-report":{"line-number":` + tt.value + `,"column-number":` + tt.value +
+				`,"document-uri":"https://shop.example.com/","violated-directive":"img-src","source-file":"https://shop.example.com/a.js?v=1"}}`,
+			"reporting-api": `[{"type":"csp-violation","body":{"lineNumber":` + tt.value + `,"columnNumber":` + tt.value +
+				`,"documentURL":"https://shop.example.com/","effectiveDirective":"img-src","sourceFile":"https://shop.example.com/a.js?v=1"}}]`,
+		}
+		for format, body := range bodies {
+			t.Run(format+" "+tt.value, func(t *testing.T) {
+				rec, logs := serve(t, http.MethodPost, "application/reports+json", body)
+				if rec.Code != http.StatusNoContent {
+					t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+				}
+				reports := submitted(logs)
+				if len(reports) != 1 {
+					t.Fatalf("logged %d reports, want 1", len(reports))
+				}
+				got := reports[0]
+				if got["line-number"] != tt.want || got["column-number"] != tt.want ||
+					got["source-file"] != "https://shop.example.com/a.js" || got["document-uri"] != "https://shop.example.com/" {
+					t.Errorf("logged %v, want line and column %d and the source file without its query", got, tt.want)
+				}
+			})
+		}
+	}
+}
+
 func TestHandlerEmptyViolationBody(t *testing.T) {
 	for _, body := range []string{`{"type":"csp-violation"}`, `[{"type":"csp-violation","body":null}]`} {
 		rec, logs := serve(t, http.MethodPost, "application/reports+json", body)
