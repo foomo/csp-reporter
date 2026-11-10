@@ -25,10 +25,10 @@ func redactURI(uri string) string {
 	if i := strings.IndexAny(uri, "?#"); i >= 0 {
 		uri = uri[:i]
 	}
-	// The host ends at the first slash that follows neither a slash nor a colon, whatever the scheme looks like.
+	// The host ends at the first slash after a byte other than a slash, colon, space or control, whatever the scheme looks like.
 	hostEnd := len(uri)
 	for i := 1; i < len(uri); i++ {
-		if uri[i] == '/' && !strings.ContainsRune(`/\:`, rune(uri[i-1])) {
+		if uri[i] == '/' && uri[i-1] > ' ' && !strings.ContainsRune(`/\:`, rune(uri[i-1])) {
 			hostEnd = i
 			break
 		}

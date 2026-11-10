@@ -42,6 +42,8 @@ func TestLoggedURI(t *testing.T) {
 		{"leading space", " https://user:pw@example.com/", " https://example.com/"},
 		{"bytes before the scheme", "x\xffhttps://u:p@h/", "x�https://h/"},
 		{"double slash after a mailto host", "mailto:user@host//x", "mailto:host//x"},
+		{"tab before the slashes", "https:\t//user:pw@host/p", "https:\t//host/p"},
+		{"newline between the slashes", "https:/\n/user:pw@host/p", "https:/\n/host/p"},
 		{"invalid scheme", "user name:pw@example.com/p", "example.com/p"},
 		{"relative value", "example.com/p?token=1", "example.com/p"},
 		{"empty", "", ""},
