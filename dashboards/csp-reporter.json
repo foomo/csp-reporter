@@ -42,7 +42,7 @@
     {
       "type": "stat",
       "title": "Rejected requests",
-      "description": "Share of requests to the report handler answered with 400, 405, 413 or 415.",
+      "description": "Share of requests to the report handler answered with 400, 405, 413, 415 or 429.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "fieldConfig": {
@@ -215,7 +215,7 @@
     {
       "type": "timeseries",
       "title": "Dropped reports by reason",
-      "description": "Entries skipped as another Reporting API type or with an empty body, and CSP reports beyond the per-request cap.",
+      "description": "Entries skipped as another Reporting API type or with an empty body, CSP reports beyond the per-request cap, and noise dropped by --drop-noise or --drop-blocked-hosts.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 7, "w": 6, "x": 6, "y": 19 },
       "fieldConfig": { "defaults": { "unit": "suffix: reports/s" }, "overrides": [] },
@@ -338,6 +338,23 @@
           "legendFormat": "{{instance}}"
         }
       ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Violations by site",
+      "description": "Recorded reports by the site their document host matches (--site); other is every report no site pattern matches. Filtered by the site variable.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+      "fieldConfig": { "defaults": { "unit": "suffix: reports/s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"], "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (site) (rate(foomo_csr_site_violations_total{site=~\"$site\"}[$__rate_interval]))",
+          "legendFormat": "{{site}}"
+        }
+      ]
     }
   ],
   "refresh": "1m",
@@ -357,6 +374,24 @@
         "options": [],
         "refresh": 1,
         "regex": "",
+        "skipUrlSync": false
+      },
+      {
+        "name": "site",
+        "label": "Site",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(foomo_csr_site_violations_total, site)",
+        "query": "label_values(foomo_csr_site_violations_total, site)",
+        "current": {},
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "options": [],
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
         "skipUrlSync": false
       }
     ]

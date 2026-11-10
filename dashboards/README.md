@@ -12,6 +12,7 @@
 - Rejected requests and dropped reports by reason, HTTP responses by method and status code.
 - Request duration p50/p95/p99 and request body size p95.
 - Goroutines, resident memory and uptime of every reporter instance.
+- Violations by site (the reporter's `--site` names, and `other` for everything unmatched), filtered by the `site` variable.
 
 ## Metrics it needs
 
@@ -26,6 +27,7 @@ The dashboard reads:
 - `foomo_csr_reports_dropped_total{reason}`
 - `foomo_csr_requests_rejected_total{reason}`
 - `foomo_csr_blocked_kind_total{kind,disposition}`
+- `foomo_csr_site_violations_total{site,directive,disposition}`
 - `foomo_csr_last_report_timestamp_seconds`
 - `go_goroutines`, `process_resident_memory_bytes`, `process_start_time_seconds` from the default Go and process collectors
 
@@ -33,7 +35,7 @@ The process panels keep only the `job` and `instance` that also expose `foomo_cs
 
 ## Import
 
-The dashboard has a `datasource` variable of type Prometheus that every panel uses, so it needs no data source mapping.
+The dashboard has a `datasource` variable of type Prometheus that every panel uses, so it needs no data source mapping. Its `site` variable lists the `site` label values of `foomo_csr_site_violations_total` and filters only the by-site panel.
 
 - UI: Dashboards, New, Import dashboard, then upload the file or paste its JSON ([docs](https://grafana.com/docs/grafana/latest/visualizations/dashboards/build-dashboards/import-dashboards/)).
 - File provisioning: put the file in the `path` of a `file` dashboard provider ([docs](https://grafana.com/docs/grafana/latest/administration/provisioning/#dashboards)).
