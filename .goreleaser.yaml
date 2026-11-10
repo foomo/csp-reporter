@@ -1,0 +1,29 @@
+version: 2
+
+project_name: csp-reporter
+
+builds:
+  - main: ./cmd/reporter
+    binary: csp-reporter
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: [tar.gz]
+
+# Release Drafter owns the release notes
+changelog:
+  disable: true
+
+release:
+  mode: keep-existing
