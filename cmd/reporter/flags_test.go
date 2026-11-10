@@ -97,7 +97,8 @@ func TestParseFlagsBuildsOptions(t *testing.T) {
 	if s.reporterAddress != ":8080" || s.prometheusAddress != ":9300" {
 		t.Errorf("addresses = %q, %q", s.reporterAddress, s.prometheusAddress)
 	}
-	handler := reporter.NewHandler(zap.NewNop(), s.options...)
+	clock := fixedClock(time.Unix(1793534400, 0))
+	handler := reporter.NewHandler(zap.NewNop(), append(s.options, reporter.WithClock(clock.Now))...)
 	send := func(remoteAddr, forwardedFor, documentURI, blockedURI string) int {
 		body := `{"csp-report":{"document-uri":"` + documentURI + `","violated-directive":"img-src","blocked-uri":"` + blockedURI + `"}}`
 		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
@@ -129,8 +130,7 @@ type fixedClock time.Time
 func (c fixedClock) Now() time.Time                         { return time.Time(c) }
 func (c fixedClock) NewTicker(d time.Duration) *time.Ticker { return time.NewTicker(d) }
 
-// Through the production logging configuration: with the flag a new key still gets its line after more than 100
-// lines of another key in the same second; without it, zap sampling drops that line as it always did.
+// With the flag a new key gets its line after 100+ lines of another key in one second; without it zap sampling drops it.
 func TestReportLogLimitThroughProductionLogger(t *testing.T) {
 	clock := fixedClock(time.Unix(1793534400, 0))
 	tests := []struct {

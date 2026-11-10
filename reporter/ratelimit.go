@@ -105,8 +105,7 @@ func clientKey(addr netip.Addr) netip.Addr {
 	return addr
 }
 
-// clientAddr is the peer, or with a trusted peer the rightmost X-Forwarded-For entry that is not a trusted proxy.
-// A malformed entry falls back to the peer, because everything left of it may be forged.
+// clientAddr trusts X-Forwarded-For only from a trusted peer, and stops at a malformed entry since all left of it may be forged.
 func clientAddr(remoteAddr string, forwardedFor []string, trusted []netip.Prefix) netip.Addr {
 	peer := parseAddr(remoteAddr)
 	if !isTrusted(peer, trusted) || len(forwardedFor) == 0 {

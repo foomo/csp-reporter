@@ -12,14 +12,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// TestBrowserFixtures feeds real request bodies captured over http://localhost from Playwright-driven engines.
-// These are Playwright builds of Chromium, Firefox and WebKit plus a branded Chrome; they do not stand in for
-// Safari or stock Firefox, and no Chromium Reporting API (report-to) payload could be captured over plain http://localhost.
+// These are Playwright builds captured over http://localhost; they do not stand in for Safari or stock Firefox.
 func TestBrowserFixtures(t *testing.T) {
 	tests := []struct {
 		file, contentType, format, disposition string
 		directives                             map[string]float64
 	}{
+		// No Chromium Reporting API (report-to) payload could be captured over plain http://localhost.
 		{"playwright-chrome-157.0.8103.39-report-uri-enforce-1.json", "application/csp-report", formatLegacy, "enforce", map[string]float64{"script-src-elem": 1}},
 		{"playwright-chrome-157.0.8103.39-report-uri-report-only-1.json", "application/csp-report", formatLegacy, "report", map[string]float64{"script-src-elem": 1}},
 		{"playwright-chromium-156.0.8078.4-report-uri-enforce-1.json", "application/csp-report", formatLegacy, "enforce", map[string]float64{"script-src-elem": 1}},
