@@ -27,3 +27,7 @@ changelog:
 
 release:
   mode: keep-existing
+  # Re-running a failed release replaces the assets it already uploaded instead of aborting
+  replace_existing_artifacts: true
+  # Without it the existing release is reset to a full release; tags like v1.4.0-rc.1 stay pre-releases
+  prerelease: auto
