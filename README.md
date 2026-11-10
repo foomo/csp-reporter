@@ -54,7 +54,7 @@ Every `POST` body is classified by its JSON shape, not its `Content-Type`:
 
 ### Flags
 
-Every flag besides the two addresses and `--max-concurrent-uploads` is off by default, so a deployment that passes no flags answers, counts and logs as before, except for the `site` log field and `foomo_csr_site_violations_total` (both `other` for every report) and the upload bound, which answers `503` only to bodies over 64 KiB or of unknown length.
+Every flag besides the two addresses and `--max-concurrent-uploads` is off by default, so a deployment that passes no flags has no rate limit, noise filter or keyed log limit, labels every report with site `other`, and answers `503` only to bodies over 64 KiB or of unknown length while 64 of them are in progress.
 
 | Flag | Default | What it does |
 | --- | --- | --- |
