@@ -41,13 +41,25 @@ func TestBrowserFixtures(t *testing.T) {
 		{"playwright-webkit-27.2-report-uri-report-only-1.json", "application/csp-report", formatLegacy, "unknown", map[string]float64{"script-src-elem": 1}},
 	}
 	// The first report's source location, as logged.
+	location := func(file string, line, column int64) map[string]interface{} {
+		return map[string]interface{}{"source-file": file, "line-number": line, "column-number": column}
+	}
 	sourceLocations := map[string]map[string]interface{}{
-		"playwright-chromium-156.0.8078.4-report-to-enforce-1.json": {
-			"source-file": "https://localhost:55644/p1-enforce-both", "line-number": int64(1), "column-number": int64(61),
-		},
-		"playwright-firefox-157.0-report-uri-enforce-1.json": {
-			"source-file": "http://localhost:58099/p3-enforce-uri", "line-number": int64(1), "column-number": int64(60),
-		},
+		"playwright-chrome-157.0.8103.39-report-to-enforce-1.json":       location("https://localhost:55512/p1-enforce-both", 1, 61),
+		"playwright-chrome-157.0.8103.39-report-to-report-only-1.json":   location("https://localhost:55512/p2-report-only-both", 1, 120),
+		"playwright-chrome-157.0.8103.39-report-uri-enforce-1.json":      location("http://localhost:58101/p3-enforce-uri", 1, 60),
+		"playwright-chrome-157.0.8103.39-report-uri-report-only-1.json":  location("http://localhost:58101/p4-report-only-uri", 1, 64),
+		"playwright-chromium-156.0.8078.4-report-to-enforce-1.json":      location("https://localhost:55644/p1-enforce-both", 1, 61),
+		"playwright-chromium-156.0.8078.4-report-to-report-only-1.json":  location("https://localhost:55644/p2-report-only-both", 1, 65),
+		"playwright-chromium-156.0.8078.4-report-uri-enforce-1.json":     location("http://localhost:58100/p3-enforce-uri", 1, 60),
+		"playwright-chromium-156.0.8078.4-report-uri-report-only-1.json": location("http://localhost:58100/p4-report-only-uri", 1, 64),
+		"playwright-firefox-157.0-report-to-enforce-1.json":              location("http://localhost:58099/p1-enforce-both", 1, 61),
+		"playwright-firefox-157.0-report-to-report-only-1.json":          location("http://localhost:58099/p2-report-only-both", 1, 65),
+		"playwright-firefox-157.0-report-uri-enforce-1.json":             location("http://localhost:58099/p3-enforce-uri", 1, 60),
+		"playwright-firefox-157.0-report-uri-report-only-1.json":         location("http://localhost:58099/p4-report-only-uri", 1, 64),
+		// WebKit sends null locations, which are logged as empty.
+		"playwright-webkit-27.2-report-to-enforce-1.json":  location("", 0, 0),
+		"playwright-webkit-27.2-report-uri-enforce-1.json": location("", 0, 0),
 	}
 	core, logs := observer.New(zap.InfoLevel)
 	handler := NewHandler(zap.New(core))
