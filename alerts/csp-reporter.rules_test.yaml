@@ -1,0 +1,98 @@
+# promtool test rules csp-reporter.rules_test.yaml
+rule_files:
+  - csp-reporter.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # With history: prod goes from 6 to 60 enforced reports a minute; stage stays at 60, three times nothing.
+  - interval: 1m
+    input_series:
+      - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="prod",directive="img-src",disposition="enforce"}'
+        values: '0+6x1440 8640+60x60'
+      - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="stage",directive="img-src",disposition="enforce"}'
+        values: '0+60x1500'
+    alert_rule_test:
+      - eval_time: 1d1h
+        alertname: CSPEnforcedViolationSpike
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              site: prod
+            exp_annotations:
+              summary: Enforced CSP violations of site prod spiked
+
+  # Without history: neither site existed a day earlier, so only the floor of 0.1 per second counts.
+  - interval: 1m
+    input_series:
+      - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="prod",directive="img-src",disposition="enforce"}'
+        values: '_x1440 0+60x60'
+      - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="stage",directive="img-src",disposition="enforce"}'
+        values: '_x1440 0+1x60'
+    alert_rule_test:
+      - eval_time: 1d1h
+        alertname: CSPEnforcedViolationSpike
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              site: prod
+            exp_annotations:
+              summary: Enforced CSP violations of site prod spiked
+
+  # Quiet sites: only the selected prod alerts, and only after 6 hours.
+  - interval: 1m
+    input_series:
+      - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="prod",directive="img-src",disposition="enforce"}'
+        values: '0x480'
+      - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="stage",directive="img-src",disposition="enforce"}'
+        values: '0x480'
+      - series: 'foomo_csr_site_violations_total{job="csp-reporter",instance="a",site="other",directive="img-src",disposition="enforce"}'
+        values: '0x480'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: CSPSiteSilent
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: CSPSiteSilent
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              site: prod
+            exp_annotations:
+              summary: No CSP reports for site prod for 6 hours
+
+  - interval: 1m
+    input_series:
+      - series: 'foomo_csr_requests_rejected_total{job="csp-reporter",instance="a",reason="overloaded"}'
+        values: '0x10 5x10'
+      - series: 'foomo_csr_requests_rejected_total{job="csp-reporter",instance="a",reason="rate_limited"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CSPReporterOverloaded
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: CSPReporterOverloaded
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              job: csp-reporter
+            exp_annotations:
+              summary: csp-reporter answered large uploads with 503
+      - eval_time: 15m
+        alertname: CSPReporterRateLimited
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="csp-reporter",instance="a"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CSPReporterDown
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: csp-reporter
+            exp_annotations:
+              summary: No csp-reporter metrics for 5 minutes

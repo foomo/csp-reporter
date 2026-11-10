@@ -4,22 +4,25 @@
 
 ## What it shows
 
-- Stat row: reports recorded per second, enforced violations per second, share of rejected requests, time since the last report.
-- Violations by directive over time, and the top ten directives over the selected range.
-- Enforce versus report-only, and the `directive="unknown"` rate (a directive the reporter does not know, or a malformed report).
+The `site` variable (the reporter's `--site` names, and `other` for everything unmatched; All by default) filters the panels built on `foomo_csr_site_violations_total`. The others count the whole collector, across all sites, and say `(collector)` in their title.
+
+- Stat row: reports recorded per second and enforced violations per second for the selected sites, then the share of rejected requests and the time since the last report for the collector. Enforced violations leave out reports without a disposition (`unknown`).
+- Violations by directive over time, and the top ten directives over the selected range, for the selected sites. Directives without reports are left out, so the series the reporter creates at startup with value 0 do not fill the panels.
+- Enforce, report-only and `unknown` for the selected sites. `unknown` is a report without a recognised disposition, mostly WebKit's legacy `report-uri` reports, which never carry one; on a site whose policy names only `report-uri` it is steady traffic, not an anomaly.
+- The `directive="unknown"` rate for the selected sites (a directive the reporter does not know, or a malformed report).
 - Recorded reports by blocked resource kind (`inline`, `eval`, `data`, `extension`, `https`, ...).
 - Share of legacy `report-uri` reports, Reporting API batches and single Reporting API reports over the selected range (`format` values `legacy`, `reporting-api-array`, `reporting-api-object`).
-- Rejected requests and dropped reports by reason, HTTP responses by method and status code.
+- Rejected requests (including `overloaded` uploads answered with `503`) and dropped reports by reason, HTTP responses by method and status code.
 - Request duration p50/p95/p99 and request body size p95.
 - Goroutines, resident memory and uptime of every reporter instance.
-- Violations by site (the reporter's `--site` names, and `other` for everything unmatched), filtered by the `site` variable.
+- Violations by site.
 
 ## Metrics it needs
 
 Prometheus must scrape the reporter's metrics listener (`--prometheus-address`, default `:9200`, path `/metrics`).
 The dashboard reads:
 
-- `foomo_csr_violated_directive_total{directive,disposition}`
+- `foomo_csr_site_violations_total{site,directive,disposition}`
 - `foomo_csr_http_requests_total{method,code}`
 - `foomo_csr_http_request_duration_seconds` (histogram)
 - `foomo_csr_request_body_bytes` (histogram; an oversized body counts as the 1 MiB limit)
@@ -27,7 +30,6 @@ The dashboard reads:
 - `foomo_csr_reports_dropped_total{reason}`
 - `foomo_csr_requests_rejected_total{reason}`
 - `foomo_csr_blocked_kind_total{kind,disposition}`
-- `foomo_csr_site_violations_total{site,directive,disposition}`
 - `foomo_csr_last_report_timestamp_seconds`
 - `go_goroutines`, `process_resident_memory_bytes`, `process_start_time_seconds` from the default Go and process collectors
 
@@ -35,7 +37,7 @@ The process panels keep only the `job` and `instance` that also expose `foomo_cs
 
 ## Import
 
-The dashboard has a `datasource` variable of type Prometheus that every panel uses, so it needs no data source mapping. Its `site` variable lists the `site` label values of `foomo_csr_site_violations_total` and filters only the by-site panel.
+The dashboard has a `datasource` variable of type Prometheus that every panel uses, so it needs no data source mapping. Its `site` variable lists the `site` label values of `foomo_csr_site_violations_total` and filters every panel without `(collector)` in its title.
 
 - UI: Dashboards, New, Import dashboard, then upload the file or paste its JSON ([docs](https://grafana.com/docs/grafana/latest/visualizations/dashboards/build-dashboards/import-dashboards/)).
 - File provisioning: put the file in the `path` of a `file` dashboard provider ([docs](https://grafana.com/docs/grafana/latest/administration/provisioning/#dashboards)).

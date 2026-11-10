@@ -10,7 +10,7 @@
     {
       "type": "stat",
       "title": "Reports recorded",
-      "description": "CSP reports logged and counted per second, both dispositions.",
+      "description": "CSP reports logged and counted per second for the selected sites, every disposition.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
       "fieldConfig": { "defaults": { "unit": "suffix: reports/s", "decimals": 2 }, "overrides": [] },
@@ -19,14 +19,14 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rate(foomo_csr_violated_directive_total[$__rate_interval])) or vector(0)"
+          "expr": "sum(rate(foomo_csr_site_violations_total{site=~\"$site\"}[$__rate_interval])) or vector(0)"
         }
       ]
     },
     {
       "type": "stat",
       "title": "Enforced violations",
-      "description": "Reports from enforced policies per second: something the policy actually blocked.",
+      "description": "Reports from enforced policies per second for the selected sites: something the policy actually blocked. Reports without a disposition (unknown, mostly WebKit report-uri reports) are not included; they show separately in Enforce, report-only and unknown.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
       "fieldConfig": { "defaults": { "unit": "suffix: reports/s", "decimals": 2 }, "overrides": [] },
@@ -35,14 +35,14 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rate(foomo_csr_violated_directive_total{disposition=\"enforce\"}[$__rate_interval])) or vector(0)"
+          "expr": "sum(rate(foomo_csr_site_violations_total{site=~\"$site\",disposition=\"enforce\"}[$__rate_interval])) or vector(0)"
         }
       ]
     },
     {
       "type": "stat",
-      "title": "Rejected requests",
-      "description": "Share of requests to the report handler answered with 400, 405, 413, 415 or 429.",
+      "title": "Rejected requests (collector)",
+      "description": "Share of requests to the report handler answered with 400, 405, 413, 415, 429 or 503, across all sites.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "fieldConfig": {
@@ -67,8 +67,8 @@
     },
     {
       "type": "stat",
-      "title": "Since last report",
-      "description": "Time since the newest report any instance recorded.",
+      "title": "Since last report (collector)",
+      "description": "Time since the newest report any instance recorded, for any site.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
       "fieldConfig": { "defaults": { "unit": "s", "decimals": 0, "noValue": "never" }, "overrides": [] },
@@ -92,7 +92,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum by (directive) (rate(foomo_csr_violated_directive_total[$__rate_interval]))",
+          "expr": "sum by (directive) (rate(foomo_csr_site_violations_total{site=~\"$site\"}[$__rate_interval])) > 0",
           "legendFormat": "{{directive}}"
         }
       ]
@@ -116,7 +116,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sort_desc(topk(10, sum by (directive) (increase(foomo_csr_violated_directive_total[$__range]))))",
+          "expr": "sort_desc(topk(10, sum by (directive) (increase(foomo_csr_site_violations_total{site=~\"$site\"}[$__range])) > 0))",
           "legendFormat": "{{directive}}",
           "instant": true,
           "range": false
@@ -125,7 +125,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Enforce versus report-only",
+      "title": "Enforce, report-only and unknown",
+      "description": "Reports of the selected sites by disposition. unknown is a report without a recognised disposition, mostly WebKit report-uri reports, which never carry one.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 7, "w": 6, "x": 0, "y": 12 },
       "fieldConfig": { "defaults": { "unit": "suffix: reports/s" }, "overrides": [] },
@@ -134,7 +135,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum by (disposition) (rate(foomo_csr_violated_directive_total[$__rate_interval]))",
+          "expr": "sum by (disposition) (rate(foomo_csr_site_violations_total{site=~\"$site\"}[$__rate_interval]))",
           "legendFormat": "{{disposition}}"
         }
       ]
@@ -142,7 +143,7 @@
     {
       "type": "timeseries",
       "title": "Unknown directive",
-      "description": "Reports whose directive is not in the reporter's list: a new directive or a malformed report.",
+      "description": "Reports of the selected sites whose directive is not in the reporter's list: a new directive or a malformed report.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 7, "w": 6, "x": 6, "y": 12 },
       "fieldConfig": { "defaults": { "unit": "suffix: reports/s" }, "overrides": [] },
@@ -151,15 +152,15 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rate(foomo_csr_violated_directive_total{directive=\"unknown\"}[$__rate_interval])) or vector(0)",
+          "expr": "sum(rate(foomo_csr_site_violations_total{site=~\"$site\",directive=\"unknown\"}[$__rate_interval])) or vector(0)",
           "legendFormat": "unknown"
         }
       ]
     },
     {
       "type": "timeseries",
-      "title": "Blocked resource kind",
-      "description": "Recorded reports by the scheme or keyword of the blocked URI.",
+      "title": "Blocked resource kind (collector)",
+      "description": "Recorded reports of all sites by the scheme or keyword of the blocked URI.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 7, "w": 6, "x": 12, "y": 12 },
       "fieldConfig": { "defaults": { "unit": "suffix: reports/s", "custom": { "stacking": { "mode": "normal", "group": "A" }, "fillOpacity": 30 } }, "overrides": [] },
@@ -175,8 +176,8 @@
     },
     {
       "type": "piechart",
-      "title": "Report format in range",
-      "description": "Legacy report-uri reports, Reporting API batches (reporting-api-array) and single Reporting API reports (reporting-api-object), before the per-request cap.",
+      "title": "Report format in range (collector)",
+      "description": "Legacy report-uri reports, Reporting API batches (reporting-api-array) and single Reporting API reports (reporting-api-object) of all sites, before the per-request cap.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 7, "w": 6, "x": 18, "y": 12 },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
@@ -198,7 +199,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Rejected requests by reason",
+      "title": "Rejected requests by reason (collector)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 7, "w": 6, "x": 0, "y": 19 },
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
@@ -214,7 +215,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Dropped reports by reason",
+      "title": "Dropped reports by reason (collector)",
       "description": "Entries skipped as another Reporting API type or with an empty body, CSP reports beyond the per-request cap, and noise dropped by --drop-noise or --drop-blocked-hosts.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 7, "w": 6, "x": 6, "y": 19 },
@@ -231,7 +232,7 @@
     },
     {
       "type": "timeseries",
-      "title": "HTTP responses by code",
+      "title": "HTTP responses by code (collector)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 7, "w": 6, "x": 12, "y": 19 },
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
@@ -247,7 +248,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Request duration",
+      "title": "Request duration (collector)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 7, "w": 6, "x": 18, "y": 19 },
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
@@ -275,7 +276,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Request body size p95",
+      "title": "Request body size p95 (collector)",
       "description": "An oversized body counts as the 1 MiB limit.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 6, "x": 0, "y": 26 },
@@ -292,7 +293,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Goroutines",
+      "title": "Goroutines (collector)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 6, "x": 6, "y": 26 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
@@ -308,7 +309,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Resident memory",
+      "title": "Resident memory (collector)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 6, "x": 12, "y": 26 },
       "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
@@ -324,7 +325,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Uptime",
+      "title": "Uptime (collector)",
       "description": "Drops to zero on a restart.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 6, "x": 18, "y": 26 },

@@ -132,7 +132,7 @@ docker run --rm -p 8080:8080 -p 9200:9200 foomo/csp-reporter:latest /usr/bin/ser
 
 The same applies on Kubernetes: container `args` replace the image's `CMD`, so they must start with the binary path, for example `args: ["/usr/bin/service", "--site", "prod=shop.example.com", "--rate-limit", "1000"]`, or set `command: ["/usr/bin/service"]` and put only the flags in `args`.
 
-The Helm chart lives in [foomo/helm-charts](https://github.com/foomo/helm-charts/tree/main/charts/csp-reporter) and is published on [Artifact Hub](https://artifacthub.io/packages/helm/foomo/csp-reporter). Its container and Service declare only port 80 and it ships no metrics port or ServiceMonitor, so scraping port 9200 has to be set up outside the chart (for example through its `podAnnotations` value, if your Prometheus discovers annotated pods).
+The Helm chart lives in [foomo/helm-charts](https://github.com/foomo/helm-charts/tree/main/charts/csp-reporter) and is published on [Artifact Hub](https://artifacthub.io/packages/helm/foomo/csp-reporter). Its container declares the report port 80 and the metrics port (`metrics.port`, default 9200). With `serviceMonitor.enabled` it also adds the metrics port to the Service and creates a Prometheus Operator ServiceMonitor; without it, set up scraping outside the chart (for example through its `podAnnotations` value, if your Prometheus discovers annotated pods).
 
 Local development:
 
@@ -194,7 +194,23 @@ Because every report line has the same message, sampling lets one noisy violatio
 
 ## Dashboards
 
-[`dashboards/`](dashboards/) holds an example Grafana dashboard built on these metrics; its [README](dashboards/README.md) lists the panels and how to import it.
+[`dashboards/`](dashboards/) holds an example Grafana dashboard built on these metrics; its [README](dashboards/README.md) lists the panels and how to import it. Its `site` variable filters the report panels; panels titled `(collector)` count all sites.
+
+## Alerts
+
+[`alerts/csp-reporter.rules.yaml`](alerts/csp-reporter.rules.yaml) holds example Prometheus alerting rules, with unit tests in [`alerts/csp-reporter.rules_test.yaml`](alerts/csp-reporter.rules_test.yaml). Adjust the `job` label, the site names and the thresholds before loading them, for example through a Prometheus Operator `PrometheusRule`.
+
+| Alert | Severity | Fires when |
+| --- | --- | --- |
+| `CSPReporterDown` | `page` | No `foomo_csr_http_requests_in_flight` series with `job="csp-reporter"` for 5 minutes; use the job label your scrape configuration gives the reporter |
+| `CSPEnforcedViolationSpike` | `ticket` | For 10 minutes, a site's enforced violations over the last 30 minutes are above 0.1 per second and three times the same 30 minutes a day earlier; a site without a series a day earlier, such as a new one, is judged by the floor alone |
+| `CSPSiteSilent` | `ticket` | Site `prod` recorded no report for 6 hours |
+| `CSPUnknownDirective` | `ticket` | A site recorded a report with `directive="unknown"` in the last hour |
+| `CSPReporterRateLimited`, `CSPReporterOverloaded`, `CSPReporterBatchCap`, `CSPReporterPanics` | `ticket` | Any `429` (`rate_limited`), `503` (`overloaded`), report dropped beyond the per-request cap (`batch_cap`) or recovered panic in the last 10 minutes |
+
+- The spike and unknown-directive rules read `foomo_csr_site_violations_total`, which exists with value 0 from startup, so the first report after a restart counts.
+- The spike rule counts `disposition="enforce"` only. Reports without a disposition (`unknown`) are mostly WebKit's legacy `report-uri` reports and steady traffic, so there is no alert on them; the dashboard shows them separately.
+- `CSPSiteSilent` is written for one site named `prod`. Copy it for every site that always has some violations, and never use it for `other`: a site with a clean policy is legitimately quiet.
 
 ## Development
 
@@ -207,7 +223,7 @@ The example server in `example/server` is a separate Go module.
 
 CI:
 
-- [`test.yml`](.github/workflows/test.yml) builds, vets and runs the race-enabled tests and builds the example server, on pushes to `main`, on pull requests and on manual runs. Its job id `test` is the status check the `main` ruleset requires; renaming the job renames the check.
+- [`test.yml`](.github/workflows/test.yml) builds, vets and runs the race-enabled tests, builds the example server and checks and tests the example alert rules with `promtool` from the `prom/prometheus` image, on pushes to `main`, on pull requests and on manual runs. Its job id `test` is the status check the `main` ruleset requires; renaming the job renames the check.
 - [`docker.yml`](.github/workflows/docker.yml) builds the image for `linux/amd64` and `linux/arm64` on pull requests, and also pushes it to Docker Hub on pushes to `main` and on published releases.
 
 ## Releasing
