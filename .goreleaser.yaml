@@ -1,0 +1,33 @@
+version: 2
+
+project_name: csp-reporter
+
+builds:
+  - main: ./cmd/reporter
+    binary: csp-reporter
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: [tar.gz]
+
+# Release Drafter owns the release notes
+changelog:
+  disable: true
+
+release:
+  mode: keep-existing
+  # Re-running a failed release replaces the assets it already uploaded instead of aborting
+  replace_existing_artifacts: true
+  # Without it the existing release is reset to a full release; tags like v1.4.0-rc.1 stay pre-releases
+  prerelease: auto
