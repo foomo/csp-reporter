@@ -85,3 +85,16 @@ func TestHandlerLogLimit(t *testing.T) {
 		t.Errorf("recorded %v reports, want 6", d)
 	}
 }
+
+func TestHandlerLogLimitKeysOnLoggedURI(t *testing.T) {
+	reportCore, reportLogs := observer.New(zap.InfoLevel)
+	handler := NewHandler(zap.NewNop(), WithLogLimitPerKey(1), WithReportLogger(zap.New(reportCore)), WithClock(newTestClock().now))
+	long := "https://shop.example.com/" + strings.Repeat("a", maxLoggedValueBytes)
+	for _, tail := range []string{"x", "y"} {
+		body := `{"csp-report":{"document-uri":"` + long + tail + `","violated-directive":"img-src","blocked-uri":"https://cdn.example.com/"}}`
+		handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
+	}
+	if n := len(submitted(reportLogs)); n != 1 {
+		t.Errorf("report logger got %d lines for document URIs that differ only past the logged cut, want 1", n)
+	}
+}

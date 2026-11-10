@@ -434,7 +434,7 @@ func (h *handler) logReport(report receivedReport, requestUserAgent, format stri
 
 	if h.logLimiter != nil {
 		key := strings.Join([]string{
-			directive, blockedKind(csp.BlockedUri), uriHost(csp.BlockedUri), redactURI(csp.DocumentUri), disposition,
+			directive, blockedKind(csp.BlockedUri), uriHost(csp.BlockedUri), loggedURI(csp.DocumentUri), disposition,
 		}, "|")
 		if !h.logLimiter.allow(key) {
 			logLinesSuppressedCount.Inc()
