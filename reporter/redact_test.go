@@ -14,7 +14,7 @@ import (
 )
 
 func TestLoggedURI(t *testing.T) {
-	longPath := "https://www.globus.ch/" + strings.Repeat("a", 10<<10)
+	longPath := "https://shop.example.com/" + strings.Repeat("a", 10<<10)
 	tests := []struct {
 		name, uri, want string
 	}{
@@ -93,7 +93,7 @@ func TestLogLineEscaping(t *testing.T) {
 	var buf bytes.Buffer
 	log := zap.New(zapcore.NewCore(zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), zapcore.AddSync(&buf), zap.InfoLevel))
 	body := `[{"type":"csp-violation","user_agent":"evil\n{\"level\":\"error\"}` + "\xe2\x80\xa8" + `",` +
-		`"body":{"documentURL":"https://www.globus.ch/\n\"x\"\u0000\u001b[31m","effectiveDirective":"script-src",` +
+		`"body":{"documentURL":"https://shop.example.com/\n\"x\"\u0000\u001b[31m","effectiveDirective":"script-src",` +
 		`"blockedURL":"inline","sample":"alert(\"\r\n\t\u0007\")","originalPolicy":"default-src 'none'\n"}}]`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -111,7 +111,7 @@ func TestLogLineEscaping(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"document-uri":    "https://www.globus.ch/\n\"x\"\u0000\u001b[31m",
+		"document-uri":    "https://shop.example.com/\n\"x\"\u0000\u001b[31m",
 		"user-agent":      "evil\n{\"level\":\"error\"}�",
 		"script-sample":   "alert(\"\r\n\t\u0007\")",
 		"original-policy": "default-src 'none'\n",

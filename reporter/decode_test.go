@@ -9,7 +9,7 @@ import (
 
 // TestDecodeParity pins status and metrics per body shape, so decoder changes cannot shift them silently.
 func TestDecodeParity(t *testing.T) {
-	valid := `{"type":"csp-violation","body":{"documentURL":"https://www.globus.ch/","effectiveDirective":"img-src",` +
+	valid := `{"type":"csp-violation","body":{"documentURL":"https://shop.example.com/","effectiveDirective":"img-src",` +
 		`"blockedURL":"https://example.com/x.png","disposition":"enforce"}}`
 	deprecation := `{"type":"deprecation","body":{"id":"x"}}`
 	var mixed []string
@@ -31,7 +31,7 @@ func TestDecodeParity(t *testing.T) {
 	}{
 		{
 			name: "legacy object",
-			body: `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src",` +
+			body: `{"csp-report":{"document-uri":"https://shop.example.com/","violated-directive":"img-src",` +
 				`"blocked-uri":"data","disposition":"report"}}`,
 			code: http.StatusNoContent,
 			want: snapshot{
@@ -130,7 +130,7 @@ func TestDecodeParity(t *testing.T) {
 		{name: "not JSON", body: `not json`, code: http.StatusBadRequest, want: snapshot{"http/POST/400": 1, "rejected/malformed_json": 1}},
 		{
 			name: "truncated JSON",
-			body: `[{"type":"csp-violation","body":{"documentURL":"https://www.globus.ch/"`,
+			body: `[{"type":"csp-violation","body":{"documentURL":"https://shop.example.com/"`,
 			code: http.StatusBadRequest,
 			want: snapshot{"http/POST/400": 1, "rejected/malformed_json": 1},
 		},

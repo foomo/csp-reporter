@@ -35,7 +35,7 @@ func TestBlockedKind(t *testing.T) {
 		{"data", "data"},
 		{"data:image/png;base64,AAAA", "data"},
 		{"blob", "blob"},
-		{"blob:https://www.globus.ch/1234", "blob"},
+		{"blob:https://shop.example.com/1234", "blob"},
 		{"chrome-extension", "extension"},
 		{"chrome-extension://abcdef/script.js", "extension"},
 		{"moz-extension://abcdef/x.js", "extension"},
@@ -225,7 +225,7 @@ func histogram(t *testing.T, h prometheus.Histogram) *dto.Histogram {
 
 func TestHandlerMetrics(t *testing.T) {
 	valid := func(directive, blocked, disposition string) string {
-		return `{"type":"csp-violation","body":{"documentURL":"https://www.globus.ch/","effectiveDirective":"` +
+		return `{"type":"csp-violation","body":{"documentURL":"https://shop.example.com/","effectiveDirective":"` +
 			directive + `","blockedURL":"` + blocked + `","disposition":"` + disposition + `"}}`
 	}
 	deprecation := `{"type":"deprecation","body":{"id":"x"}}`
@@ -242,7 +242,7 @@ func TestHandlerMetrics(t *testing.T) {
 		{
 			name:   "legacy report",
 			method: http.MethodPost,
-			body: `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src",` +
+			body: `{"csp-report":{"document-uri":"https://shop.example.com/","violated-directive":"img-src",` +
 				`"blocked-uri":"data","disposition":"report"}}`,
 			want: snapshot{
 				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1,
@@ -252,7 +252,7 @@ func TestHandlerMetrics(t *testing.T) {
 		{
 			name:   "legacy report-only report with a fallback violated directive",
 			method: http.MethodPost,
-			body: `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"default-src 'self'",` +
+			body: `{"csp-report":{"document-uri":"https://shop.example.com/","violated-directive":"default-src 'self'",` +
 				`"effective-directive":"img-src","blocked-uri":"data","disposition":"reporting"}}`,
 			want: snapshot{
 				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1,
@@ -299,7 +299,7 @@ func TestHandlerMetrics(t *testing.T) {
 		{
 			name:   "single Reporting API report",
 			method: http.MethodPost,
-			body:   valid("worker-src", "blob:https://www.globus.ch/1", "enforce"),
+			body:   valid("worker-src", "blob:https://shop.example.com/1", "enforce"),
 			want: snapshot{
 				"http/POST/204": 1, "received/reporting-api-object": 1, "browser/other/reporting-api-object": 1,
 				"directive": 1, "source/effective_directive": 1, "blocked/blob/enforce": 1,
