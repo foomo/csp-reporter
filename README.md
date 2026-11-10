@@ -16,7 +16,7 @@ Content-Security-Policy: default-src 'self'; report-to csp-endpoint; report-uri 
 ```
 
 - The name after `report-to` must be an endpoint defined in [`Reporting-Endpoints`](https://www.w3.org/TR/reporting-1/#header).
-- Endpoint URLs in `Reporting-Endpoints` must be potentially trustworthy (HTTPS); other endpoints are ignored ([Reporting API](https://www.w3.org/TR/reporting-1/#header)).
+- Endpoint URLs in `Reporting-Endpoints` must be potentially trustworthy (HTTPS); other endpoints are ignored ([Reporting API](https://www.w3.org/TR/reporting-1/#header)). The service itself speaks plain HTTP only, so terminate TLS in front of it (for example with the Helm chart's ingress).
 - Send the policy as a response header: `report-uri` and `Content-Security-Policy-Report-Only` are not supported in a `<meta>` element ([CSP3](https://www.w3.org/TR/CSP3/#meta-element)).
 - To roll out a policy without blocking anything, send it as [`Content-Security-Policy-Report-Only`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy-Report-Only) first; its reports arrive with disposition `report`.
 - Add [`'report-sample'`](https://www.w3.org/TR/CSP3/#grammardef-report-sample) to a directive to get a sample of the blocked inline code in `script-sample`.
@@ -63,7 +63,7 @@ The image sets `CMD`, not `ENTRYPOINT`, so pass flags with the full command:
 docker run --rm -p 8080:8080 -p 9200:9200 foomo/csp-reporter:latest /usr/bin/service --address=:8080
 ```
 
-The Helm chart lives in [foomo/helm-charts](https://github.com/foomo/helm-charts/tree/main/charts/csp-reporter) and is published on [Artifact Hub](https://artifacthub.io/packages/helm/foomo/csp-reporter).
+The Helm chart lives in [foomo/helm-charts](https://github.com/foomo/helm-charts/tree/main/charts/csp-reporter) and is published on [Artifact Hub](https://artifacthub.io/packages/helm/foomo/csp-reporter). Its container and Service declare only port 80 and it ships no metrics port or ServiceMonitor, so scraping port 9200 has to be set up outside the chart (for example through its `podAnnotations` value, if your Prometheus discovers annotated pods).
 
 Local development:
 
@@ -116,7 +116,7 @@ The example server in `example/server` is a separate Go module.
 
 CI:
 
-- [`test.yml`](.github/workflows/test.yml) builds, vets and runs the race-enabled tests and builds the example server, on pushes to `main` and on pull requests. Its job `test` is the status check that pull requests to `main` must pass.
+- [`test.yml`](.github/workflows/test.yml) builds, vets and runs the race-enabled tests and builds the example server, on pushes to `main`, on pull requests and on manual runs. Its job id `test` is the status check name; renaming the job renames the check.
 - [`docker.yml`](.github/workflows/docker.yml) builds the image for `linux/amd64` and `linux/arm64` on pull requests, and also pushes it to Docker Hub on pushes to `main` and on published releases.
 
 ## Releasing
