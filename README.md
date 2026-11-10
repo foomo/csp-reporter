@@ -35,21 +35,29 @@ Every `POST` body is classified by its JSON shape, not its `Content-Type`:
 | --- | --- |
 | `POST` with one of the shapes above | `204`; entries of another `type` (for example `deprecation`), entries without a body and an empty array are skipped and still answered with `204` |
 | `POST` that is not JSON, not one of the shapes, or an array whose entries have no `type` | `400` |
+| `POST` whose body cannot be read (the client disconnects or the read times out) | `400` |
 | `POST` body over 1 MiB | `413` |
+| `POST` with a `Content-Encoding` other than `identity` (for example `gzip`) | `415`; the body is not read |
+| `POST` that hits a bug in the service (a recovered panic) | `500` |
 | `OPTIONS` (CORS preflight) | `204` |
 | `GET` | `200` with a plain text greeting |
 | any other method | `405` |
+| request headers over 16 KiB | `431`, answered by the Go HTTP server before the handler runs, so it is not in the metrics |
 
 - A request records at most 100 reports; further CSP reports in the same batch are dropped and counted in `foomo_csr_reports_dropped_total{reason="batch_cap"}`.
 - `OPTIONS` and `POST` responses allow any origin: they echo the request's `Origin` (or `*` without one) in `Access-Control-Allow-Origin`, allow `POST, OPTIONS` and the `Content-Type` header; preflight answers also send `Access-Control-Max-Age: 86400`.
-- Only the disposition `report` counts as report-only; anything else counts as `enforce`.
+- The dispositions `report` and `reporting` count as report-only; anything else counts as `enforce`. CSP3 names the value `report`, while MDN documents `reporting` for `CSPViolationReportBody`, so both are accepted.
 
 ## Running it
 
 | Flag | Default | Serves |
 | --- | --- | --- |
 | `--address` | `:80` | CSP reports |
-| `--prometheus-address` | `:9200` | Prometheus metrics at `/metrics` |
+| `--prometheus-address` | `:9200` | Prometheus metrics at `/metrics` (and every other path), and `200 ok` at `/healthz` |
+
+Server limits on the report listener: 5 s to read the request headers, 30 s to read the whole request, 30 s to write the response, 620 s before an idle keep-alive connection is closed (longer than the 600 s backend keep-alive of Google Cloud load balancers, so the load balancer closes first) and 16 KiB of request headers. A report upload that takes longer than 30 s is cut off. The metrics listener allows 5 s for the request headers and the same idle time, with no read or write limit for the body.
+
+On `SIGTERM` or `SIGINT` the service stops accepting connections, waits up to 10 s for requests in progress and exits with status 0; requests still running after 10 s are cut off and logged as a warning. If either listener fails, for example because its port is taken, both are shut down the same way and the service exits with status 1.
 
 The Docker image `foomo/csp-reporter` runs the service with the defaults and exposes ports 80 and 9200 (the host ports below are examples):
 
@@ -82,22 +90,37 @@ Every label value comes from a fixed set in code, never from the report, so the 
 | --- | --- | --- |
 | `foomo_csr_violated_directive_total` | counter | `directive`: one of the directives listed below, or `unknown`; `disposition`: `enforce`, `report` |
 | `foomo_csr_blocked_kind_total` | counter | `kind`: `inline`, `eval`, `wasm_eval`, `data`, `blob`, `extension`, `https`, `http`, `other_scheme`, `empty`; `disposition`: `enforce`, `report` |
-| `foomo_csr_reports_received_total` | counter | `format`: `legacy`, `reporting-api` |
+| `foomo_csr_directive_source_total` | counter | `source`: `effective_directive`, `violated_directive`, `unrecognised`, `missing` |
+| `foomo_csr_browser_reports_total` | counter | `browser`: `chrome`, `firefox`, `safari`, `edge`, `other`; `format`: as in `reports_received_total` |
+| `foomo_csr_reports_received_total` | counter | `format`: `legacy`, `reporting-api-array`, `reporting-api-object` |
 | `foomo_csr_reports_dropped_total` | counter | `reason`: `non_csp_type`, `empty_body`, `batch_cap` |
-| `foomo_csr_requests_rejected_total` | counter | `reason`: `body_too_large`, `malformed_json`, `unknown_shape`, `method_not_allowed` |
-| `foomo_csr_http_requests_total` | counter | `method`: `GET`, `POST`, `OPTIONS`, `other`; `code`: `200`, `204`, `400`, `405`, `413` |
+| `foomo_csr_requests_rejected_total` | counter | `reason`: `body_too_large`, `malformed_json`, `unknown_shape`, `read_error`, `unsupported_encoding`, `method_not_allowed` |
+| `foomo_csr_http_requests_total` | counter | `method`: `GET`, `POST`, `OPTIONS`, `other`; `code`: `200`, `204`, `400`, `405`, `413`, `415`, `500` |
+| `foomo_csr_http_requests_in_flight` | gauge | none |
 | `foomo_csr_http_request_duration_seconds` | histogram | none |
 | `foomo_csr_request_body_bytes` | histogram | none; an oversized body counts as 1048576 bytes |
+| `foomo_csr_reports_per_request` | histogram | none; buckets 1, 2, 5, 10, 25, 50, 100 |
+| `foomo_csr_panics_recovered_total` | counter | none |
 | `foomo_csr_last_report_timestamp_seconds` | gauge | none |
 
-- `directive` is the first word of the report's violated directive (the effective directive for Reporting API reports) when it is one of `child-src`, `connect-src`, `default-src`, `font-src`, `frame-src`, `img-src`, `manifest-src`, `media-src`, `object-src`, `prefetch-src`, `script-src`, `script-src-elem`, `script-src-attr`, `style-src`, `style-src-elem`, `style-src-attr`, `worker-src`, `base-uri`, `form-action`, `frame-ancestors` ([`reporter/constants.go`](reporter/constants.go)); anything else is `unknown`.
-- `foomo_csr_reports_received_total` counts reports before the per-request cap, so recorded reports are received minus `batch_cap` drops.
+- `directive` is the first word of the report's effective directive when it is one of `child-src`, `connect-src`, `default-src`, `font-src`, `frame-src`, `img-src`, `manifest-src`, `media-src`, `object-src`, `prefetch-src`, `script-src`, `script-src-elem`, `script-src-attr`, `style-src`, `style-src-elem`, `style-src-attr`, `worker-src`, `base-uri`, `form-action`, `frame-ancestors` ([`reporter/constants.go`](reporter/constants.go)), otherwise the first word of the violated directive when that is one of them, otherwise `unknown`. Legacy reports whose `violated-directive` names a fallback (for example `default-src 'self'` while `effective-directive` is `img-src`) therefore count under the effective directive. Reporting API reports carry only the effective directive.
+- `foomo_csr_directive_source_total` says which field each recorded report's `directive` came from: `unrecognised` when a directive was sent but neither field is in the list, `missing` when both are empty.
+- `format` is `legacy` for `{"csp-report": ...}`, `reporting-api-array` for a Reporting API batch and `reporting-api-object` for a single Reporting API report.
+- `browser` comes from the user agent that is also logged, checked in this order: `edge` when it contains `Edg/`, `EdgA/`, `EdgiOS/` or `Edge/`; `firefox` for `Firefox/` or `FxiOS/`; `chrome` for `Chrome/`, `CriOS/` or `Chromium/`, which includes other Chromium-based browsers such as Opera; `safari` for `Safari/`; `other` for everything else.
+- `foomo_csr_reports_received_total` counts reports before the per-request cap, so recorded reports are received minus `batch_cap` drops. `foomo_csr_reports_per_request` observes the same count once per accepted `POST`, including `0` for a request that carried no CSP report.
+- `foomo_csr_panics_recovered_total` counts requests that hit a bug and were answered with `500`.
 - All series except `foomo_csr_violated_directive_total` exist with value 0 from startup; that one appears with the first report for each directive and disposition.
 - The Go runtime and process collectors (`go_*`, `process_*`) are exported as well.
 
 ## Logs
 
-Each recorded report produces one JSON line on stderr with the message `content security policy report submitted` and the fields `disposition`, `document-uri`, `referrer`, `violated-directive`, `effective-directive`, `original-policy`, `blocked-uri`, `user-agent`, `script-sample` and `status-code`. `user-agent` is taken from the report when it names one, otherwise from the request.
+Each recorded report produces one JSON line on stderr with the message `content security policy report submitted` and the fields `disposition`, `document-uri`, `referrer`, `violated-directive`, `effective-directive`, `original-policy`, `blocked-uri`, `user-agent`, `script-sample` and `status-code`. `user-agent` is taken from the report when it names one, otherwise from the request. The client IP address is not logged.
+
+Logged values are reduced before they are written, so tokens and credentials in URLs do not end up in the logs:
+
+- `document-uri`, `referrer` and `blocked-uri` lose everything from the first `?` or `#` (query and fragment) and, when they start with a scheme or `//`, the userinfo (`user:password@`) in front of the host; without `//`, as in `mailto:user@host`, the text up to the `@` goes. This works on the text, so values that are not valid URLs are reduced as well. Keywords and bare schemes such as `inline`, `eval`, `data` and `blob` are logged as sent.
+- Invalid UTF-8 is replaced with U+FFFD, and values are cut without splitting a character: URIs and `user-agent` to 2048 bytes, `original-policy`, `violated-directive` and `effective-directive` to 4096 bytes, `script-sample` to 40 characters.
+- The metrics are computed from the values as sent; only the log line is reduced.
 
 Logging is sampled (zap sampling in [`cmd/reporter/main.go`](cmd/reporter/main.go)): per second and message, the first 100 lines are written and then every 100th. Log line counts are therefore not report counts; use the metrics for counting.
 
