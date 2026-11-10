@@ -66,7 +66,7 @@ type settings struct {
 // parseFlags validates every flag, so a bad value stops the service before it listens; report lines go to reportLog
 // when --log-limit-per-key is set.
 func parseFlags(args []string, output io.Writer, reportLog *zap.Logger) (settings, error) {
-	fs := flag.NewFlagSet("csp-reporter", flag.ContinueOnError)
+	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	fs.SetOutput(output)
 	var (
 		s                     settings
