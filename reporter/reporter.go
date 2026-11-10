@@ -62,6 +62,8 @@ type handler struct {
 	noise      *noiseFilter
 	sites      *Sites
 	logLimiter *logLimiter
+	// uploads holds one token per POST with a large or unknown body length, from before its body is read until it is answered.
+	uploads chan struct{}
 }
 
 func NewHandler(log *zap.Logger, opts ...Option) http.HandlerFunc {
@@ -81,6 +83,9 @@ func NewHandler(log *zap.Logger, opts ...Option) http.HandlerFunc {
 	}
 	if o.logLimitPerKey > 0 {
 		h.logLimiter = newLogLimiter(o)
+	}
+	if o.maxUploads > 0 {
+		h.uploads = make(chan struct{}, o.maxUploads)
 	}
 	initSiteSeries(o.sites)
 
@@ -129,6 +134,19 @@ func NewHandler(log *zap.Logger, opts ...Option) http.HandlerFunc {
 				requestsRejectedCount.WithLabelValues(rejectUnsupportedEncoding).Inc()
 				http.Error(w, `{"message":"unsupported content encoding"}`, http.StatusUnsupportedMediaType)
 				return
+			}
+			// A small declared length needs no slot: the server reads no more than it declares.
+			if h.uploads != nil && (r.ContentLength < 0 || r.ContentLength > maxUnslottedBodyBytes) {
+				select {
+				case h.uploads <- struct{}{}:
+					// Deferred, so the slot is freed on every return and on a panic.
+					defer func() { <-h.uploads }()
+				default:
+					requestsRejectedCount.WithLabelValues(rejectOverloaded).Inc()
+					w.Header().Set("Retry-After", "1")
+					http.Error(w, `{"message":"overloaded"}`, http.StatusServiceUnavailable)
+					return
+				}
 			}
 			// The server's own writer, so MaxBytesReader can still close the connection on overflow.
 			reports, stats, err := decodeFilteredReports(http.MaxBytesReader(rw, r.Body, maxBodyBytes), h.noise)
@@ -192,6 +210,9 @@ func isKnownDirective(directive string) bool {
 
 // maxBodyBytes caps one request; a Reporting API batch of CSP reports stays far below it.
 const maxBodyBytes = 1 << 20
+
+// maxUnslottedBodyBytes is the largest declared body that takes no upload slot; browser reports and batches stay below it.
+const maxUnslottedBodyBytes = 64 << 10
 
 // maxReportsPerRequest caps the reports recorded from one batch, so one request cannot flood the
 // log and the metric; a browser batch stays far below it. Reports beyond the cap are dropped.

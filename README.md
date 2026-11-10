@@ -40,6 +40,7 @@ Every `POST` body is classified by its JSON shape, not its `Content-Type`:
 | `POST` with a `Content-Encoding` other than `identity` (for example `gzip`) | `415`; the body is not read |
 | `POST` over `--rate-limit` or `--rate-limit-per-ip` (both off by default) | `429`; the body is not read |
 | `POST` that hits a bug in the service (a recovered panic) | `500` |
+| `POST` with a body over 64 KiB or of unknown length while `--max-concurrent-uploads` such requests are in progress | `503` with `Retry-After: 1`; the body is not read |
 | `OPTIONS` (CORS preflight) | `204` |
 | `GET` | `200` with a plain text greeting |
 | any other method | `405` |
@@ -53,7 +54,7 @@ Every `POST` body is classified by its JSON shape, not its `Content-Type`:
 
 ### Flags
 
-Every flag besides the two addresses is off by default, so a deployment that passes no flags answers, counts and logs as before, except for the `site` log field and `foomo_csr_site_violations_total` (both `other` for every report).
+Every flag besides the two addresses and `--max-concurrent-uploads` is off by default, so a deployment that passes no flags answers, counts and logs as before, except for the `site` log field and `foomo_csr_site_violations_total` (both `other` for every report) and the upload bound, which answers `503` only to bodies over 64 KiB or of unknown length.
 
 | Flag | Default | What it does |
 | --- | --- | --- |
@@ -66,8 +67,9 @@ Every flag besides the two addresses is off by default, so a deployment that pas
 | `--drop-noise` | `false` | Drops reports blocking browser extensions, webview or placeholder schemes and localhost; see [Noise filter](#noise-filter) |
 | `--drop-blocked-hosts` | none | Comma-separated hosts whose blocked resources, subdomains included, are dropped; repeatable |
 | `--log-limit-per-key` | `0` (off) | Report log lines per second and key, instead of zap sampling; see [Logs](#logs) |
+| `--max-concurrent-uploads` | `64` | `POST` requests with a body over 64 KiB or of unknown length handled at once; `0` turns the bound off; see [Upload bound](#upload-bound) |
 
-A value the service cannot use (a negative or non-numeric rate, a malformed CIDR, host or site name, a host mapped to two sites, more than 20 site names) stops it at startup with exit status 2 and a message that names the flag.
+A value the service cannot use (a negative or non-numeric rate or count, a malformed CIDR, host or site name, a host mapped to two sites, more than 20 site names) stops it at startup with exit status 2 and a message that names the flag.
 
 ### Sites
 
@@ -89,6 +91,14 @@ The site is taken from the report, which any client can forge, so it says where 
 - Browsers count a `429` as a failed delivery, and the service does not record the reports of a limited request. Set the limits well above normal traffic; they are meant to cap floods.
 - A client is an IPv4 address or an IPv6 `/64`. Up to 10000 clients are tracked per generation and two generations are kept; clients idle for a whole generation are forgotten and start with a full bucket again. A sender that controls more than 20000 addresses or `/64`s (one IPv6 `/48` holds 65536) can cycle through them faster than the table remembers, so per-client limiting assumes clients do not; set `--rate-limit` as well whenever `--rate-limit-per-ip` is set.
 - The client address is the TCP peer. Behind an ingress or load balancer every request comes from the proxy, so per-client limiting then needs `--trusted-proxies` covering every proxy hop: `X-Forwarded-For` is read only when the peer is in that list, and the client is the rightmost entry that is not. A malformed entry falls back to the peer address, so the forgeable entries to its left are never used. Without `--trusted-proxies` all clients behind a proxy share one bucket. Give IPv4 proxies in IPv4 form; an IPv4-mapped IPv6 entry such as `::ffff:10.0.0.0/104` is rejected.
+
+### Upload bound
+
+A `POST` whose `Content-Length` is over 64 KiB, or that declares no length (chunked), takes one of `--max-concurrent-uploads` slots after the rate limit and `Content-Encoding` checks and before its body is read, and keeps it until it is answered. When no slot is free it gets `503` with `Retry-After: 1` and counts in `foomo_csr_requests_rejected_total{reason="overloaded"}`. A request that declares 64 KiB or less never takes a slot and is never answered `503`, because the server reads no more than the declared length; single reports and browser batches stay far below it, so they keep flowing while every slot is taken.
+
+- The bound limits memory, not abuse. Each slot can hold a body of up to 1 MiB while it is read and decoded. With 64 concurrent worst-case 1 MiB uploads decoded at once (legacy reports with long strings, batches of 100 large reports, arrays of empty objects), the `linux/arm64` image peaked at about 190 MB resident set, about 3 MiB per slot on top of an idle process of about 10 MB; while the bodies were still arriving they held about 1.3 MiB per slot. Size a container memory limit from that, or lower the bound.
+- A slot is held for the whole body read, up to the 30 s read limit, so slow or stalled large uploads use up slots without using much memory. Use `--rate-limit-per-ip` against a single sender.
+- Browsers count a `503` as a failed delivery, and the service does not record the reports of a refused request.
 
 ### Noise filter
 
@@ -146,8 +156,8 @@ Every label value comes from a fixed set in code, never from the report, so the 
 | `foomo_csr_reports_received_total` | counter | `format`: `legacy`, `reporting-api-array`, `reporting-api-object` |
 | `foomo_csr_site_violations_total` | counter | `site`: a name from `--site`, or `other`; `directive` and `disposition`: as in `violated_directive_total` |
 | `foomo_csr_reports_dropped_total` | counter | `reason`: `non_csp_type`, `empty_body`, `batch_cap`, and with the noise filter `noise_extension`, `noise_scheme`, `noise_localhost`, `noise_operator_domain` |
-| `foomo_csr_requests_rejected_total` | counter | `reason`: `body_too_large`, `malformed_json`, `unknown_shape`, `read_error`, `unsupported_encoding`, `rate_limited`, `method_not_allowed` |
-| `foomo_csr_http_requests_total` | counter | `method`: `GET`, `POST`, `OPTIONS`, `other`; `code`: `200`, `204`, `400`, `405`, `413`, `415`, `429`, `500` |
+| `foomo_csr_requests_rejected_total` | counter | `reason`: `body_too_large`, `malformed_json`, `unknown_shape`, `read_error`, `unsupported_encoding`, `rate_limited`, `overloaded`, `method_not_allowed` |
+| `foomo_csr_http_requests_total` | counter | `method`: `GET`, `POST`, `OPTIONS`, `other`; `code`: `200`, `204`, `400`, `405`, `413`, `415`, `429`, `500`, `503` |
 | `foomo_csr_log_lines_suppressed_total` | counter | none; report log lines held back by `--log-limit-per-key` |
 | `foomo_csr_http_requests_in_flight` | gauge | none |
 | `foomo_csr_http_request_duration_seconds` | histogram | none |

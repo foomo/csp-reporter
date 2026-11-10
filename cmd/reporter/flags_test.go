@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,13 +27,47 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if s.reporterAddress != ":80" || s.prometheusAddress != ":9200" {
 		t.Errorf("addresses = %q, %q, want :80, :9200", s.reporterAddress, s.prometheusAddress)
 	}
-	// No options means NewHandler(log), the handler of a deployment that sets no flag.
-	if len(s.options) != 0 {
-		t.Errorf("%d handler options without flags, want 0", len(s.options))
+	// A deployment that sets no flag gets only the upload bound; everything else stays as in NewHandler(log).
+	if len(s.options) != 1 {
+		t.Errorf("%d handler options without flags, want 1", len(s.options))
 	}
-	if s, _ := parseFlags([]string{"--rate-limit=0", "--rate-limit-per-ip=0", "--log-limit-per-key=0"}, io.Discard, zap.NewNop()); len(s.options) != 0 {
+	if s, _ := parseFlags([]string{"--rate-limit=0", "--rate-limit-per-ip=0", "--log-limit-per-key=0", "--max-concurrent-uploads=0"}, io.Discard, zap.NewNop()); len(s.options) != 0 {
 		t.Errorf("%d handler options for explicit zeros, want 0", len(s.options))
 	}
+}
+
+// Without flags, the next large upload gets 503 while the default number of them are in flight.
+func TestParseFlagsDefaultUploadBound(t *testing.T) {
+	s, err := parseFlags(nil, io.Discard, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := reporter.NewHandler(zap.NewNop(), s.options...)
+	var wg sync.WaitGroup
+	var writers []*io.PipeWriter
+	for i := 0; i < defaultMaxConcurrentUploads; i++ {
+		pr, pw := io.Pipe()
+		writers = append(writers, pw)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", pr))
+		}()
+		// Returns once the handler reads, so its slot is taken.
+		if _, err := pw.Write([]byte("{")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Not a strings.Reader, so the length is unknown and the request needs a slot.
+	rec := httptest.NewRecorder()
+	handler(rec, httptest.NewRequest(http.MethodPost, "/", io.NopCloser(strings.NewReader("{}"))))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("upload number %d = %d, want 503", defaultMaxConcurrentUploads+1, rec.Code)
+	}
+	for _, pw := range writers {
+		_ = pw.Close()
+	}
+	wg.Wait()
 }
 
 func TestParseFlagsRejects(t *testing.T) {
@@ -61,6 +96,9 @@ func TestParseFlagsRejects(t *testing.T) {
 		{[]string{"--site=prod=shop.example.com", "--site=stage=shop.example.com"}, "-site"},
 		{[]string{"--log-limit-per-key=-1"}, "-log-limit-per-key"},
 		{[]string{"--log-limit-per-key=1.5"}, "-log-limit-per-key"},
+		{[]string{"--max-concurrent-uploads=-1"}, "-max-concurrent-uploads"},
+		{[]string{"--max-concurrent-uploads=1.5"}, "-max-concurrent-uploads"},
+		{[]string{"--max-concurrent-uploads=many"}, "-max-concurrent-uploads"},
 		{[]string{"--drop-noise=maybe"}, "-drop-noise"},
 		{[]string{"--no-such-flag"}, "-no-such-flag"},
 	}

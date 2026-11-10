@@ -27,6 +27,8 @@ const (
 	defaultLogSamplingCount = 100
 	defaultLogEncoding      = "json"
 	shutdownTimeout         = 10 * time.Second
+	// defaultMaxConcurrentUploads is on, unlike the other protections, because it bounds memory and costs ordinary reports nothing.
+	defaultMaxConcurrentUploads = 64
 )
 
 func main() {
@@ -57,7 +59,7 @@ func main() {
 	_ = log.Sync()
 }
 
-// settings are the parsed flags; options holds only what a flag turned on.
+// settings are the parsed flags; options holds only what is turned on, by a flag or by the upload bound's default.
 type settings struct {
 	reporterAddress, prometheusAddress string
 	options                            []reporter.Option
@@ -74,6 +76,7 @@ func parseFlags(args []string, output io.Writer, reportLog *zap.Logger) (setting
 		dropHosts             reporter.Hosts
 		sites                 reporter.Sites
 		logLimitPerKey        int
+		maxUploads            = defaultMaxConcurrentUploads
 		dropNoise             bool
 		setDropHosts, setSite bool
 	)
@@ -103,14 +106,8 @@ func parseFlags(args []string, output io.Writer, reportLog *zap.Logger) (setting
 	fs.BoolVar(&dropNoise, "drop-noise", false, "drop reports blocking browser extensions, webview or placeholder schemes, or localhost")
 	fs.Var(&dropHosts, "drop-blocked-hosts", "comma-separated hosts whose blocked resources, subdomains included, are dropped")
 	fs.Var(&sites, "site", "repeatable name=host[,host...]; label reports by document host, *.host matches subdomains")
-	fs.Func("log-limit-per-key", "report log lines per second per key, unsampled, 100 per second in total (default 0, off: zap sampling)", func(v string) error {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 {
-			return errors.New("want a whole number of 0 or more")
-		}
-		logLimitPerKey = n
-		return nil
-	})
+	fs.Func("log-limit-per-key", "report log lines per second per key, unsampled, 100 per second in total (default 0, off: zap sampling)", countFlag(&logLimitPerKey))
+	fs.Func("max-concurrent-uploads", fmt.Sprintf("POST requests with a body over 64 KiB or of unknown length handled at once, answered with 503 beyond it; smaller bodies are never limited (default %d, 0 off)", defaultMaxConcurrentUploads), countFlag(&maxUploads))
 	if err := fs.Parse(args); err != nil {
 		return s, err
 	}
@@ -140,7 +137,22 @@ func parseFlags(args []string, output io.Writer, reportLog *zap.Logger) (setting
 	if logLimitPerKey > 0 {
 		s.options = append(s.options, reporter.WithLogLimitPerKey(logLimitPerKey), reporter.WithReportLogger(reportLog))
 	}
+	if maxUploads > 0 {
+		s.options = append(s.options, reporter.WithMaxConcurrentUploads(maxUploads))
+	}
 	return s, nil
+}
+
+// countFlag accepts a whole number of 0 or more.
+func countFlag(n *int) func(string) error {
+	return func(v string) error {
+		i, err := strconv.Atoi(v)
+		if err != nil || i < 0 {
+			return errors.New("want a whole number of 0 or more")
+		}
+		*n = i
+		return nil
+	}
 }
 
 // rateFlag accepts a finite rate of 0 or more, which flag.Float64 would not check.
