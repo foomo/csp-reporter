@@ -1,16 +1,20 @@
 package reporter
 
 import (
+	"errors"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
+	"go.uber.org/zap"
 )
 
 func TestBlockedKind(t *testing.T) {
@@ -71,7 +75,7 @@ func TestMetricsPreinitialised(t *testing.T) {
 		"foomo_csr_http_requests_total":     len(httpSeries),
 		"foomo_csr_reports_received_total":  2,
 		"foomo_csr_reports_dropped_total":   3,
-		"foomo_csr_requests_rejected_total": 4,
+		"foomo_csr_requests_rejected_total": len(rejectReasons),
 		"foomo_csr_blocked_kind_total":      len(blockedKinds) * 2,
 	}
 	for _, mf := range startupFamilies {
@@ -109,7 +113,7 @@ func takeSnapshot(t *testing.T) snapshot {
 	for _, r := range []string{dropNonCSPType, dropEmptyBody, dropBatchCap} {
 		s["dropped/"+r] = testutil.ToFloat64(reportsDroppedCount.WithLabelValues(r))
 	}
-	for _, r := range []string{rejectBodyTooLarge, rejectMalformedJSON, rejectUnknownShape, rejectMethodNotAllowed} {
+	for _, r := range rejectReasons {
 		s["rejected/"+r] = testutil.ToFloat64(requestsRejectedCount.WithLabelValues(r))
 	}
 	for _, k := range blockedKinds {
@@ -297,4 +301,18 @@ func TestHandlerMetrics(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A body that breaks off, for example on a timeout or disconnect, is not malformed JSON.
+func TestHandlerReadError(t *testing.T) {
+	before := takeSnapshot(t)
+	req := httptest.NewRequest(http.MethodPost, "/", iotest.ErrReader(errors.New("connection reset")))
+	rec := httptest.NewRecorder()
+	NewHandler(zap.NewNop())(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	checkDelta(t, takeSnapshot(t).delta(before), snapshot{
+		"http/POST/400": 1, "rejected/read_error": 1, "durations": 1, "bodies": 1,
+	})
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -90,8 +91,11 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 			}
 			if err != nil {
 				reason := rejectMalformedJSON
-				if errors.Is(err, errUnknownReport) {
+				switch {
+				case errors.Is(err, errUnknownReport):
 					reason = rejectUnknownShape
+				case errors.Is(err, errReadBody):
+					reason = rejectReadError
 				}
 				requestsRejectedCount.WithLabelValues(reason).Inc()
 				log.Warn("Could not deserialize request", zap.Error(err))
@@ -178,6 +182,9 @@ var errMalformedJSON = errors.New("body is not valid JSON")
 // errBodyTooLarge is returned for a body over maxBodyBytes.
 var errBodyTooLarge = errors.New("request body too large")
 
+// errReadBody is returned when the body cannot be read, for example after a timeout or disconnect.
+var errReadBody = errors.New("could not read request body")
+
 // unmarshalLenient ignores values of the wrong JSON type: encoding/json skips them and still
 // fills every other field, so one mistyped field does not cost the report or the whole batch.
 func unmarshalLenient(data []byte, v interface{}) error {
@@ -204,7 +211,7 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 		if errors.As(err, &maxBytesErr) {
 			return nil, stats, errBodyTooLarge
 		}
-		return nil, stats, err
+		return nil, stats, fmt.Errorf("%w: %w", errReadBody, err)
 	}
 	trimmed := bytes.TrimLeft(data, " \t\r\n")
 	if !json.Valid(trimmed) {

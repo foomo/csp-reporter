@@ -25,6 +25,7 @@ const (
 	rejectMalformedJSON    = "malformed_json"
 	rejectUnknownShape     = "unknown_shape"
 	rejectMethodNotAllowed = "method_not_allowed"
+	rejectReadError        = "read_error"
 
 	methodOther = "other"
 )
@@ -82,6 +83,10 @@ var (
 	})
 )
 
+var rejectReasons = []string{
+	rejectBodyTooLarge, rejectMalformedJSON, rejectUnknownShape, rejectMethodNotAllowed, rejectReadError,
+}
+
 var blockedKinds = []string{
 	"inline", "eval", "wasm_eval", "data", "blob", "extension", "https", "http", "other_scheme", "empty",
 }
@@ -100,7 +105,7 @@ func init() {
 	for _, reason := range []string{dropNonCSPType, dropEmptyBody, dropBatchCap} {
 		reportsDroppedCount.WithLabelValues(reason)
 	}
-	for _, reason := range []string{rejectBodyTooLarge, rejectMalformedJSON, rejectUnknownShape, rejectMethodNotAllowed} {
+	for _, reason := range rejectReasons {
 		requestsRejectedCount.WithLabelValues(reason)
 	}
 	for _, kind := range blockedKinds {
