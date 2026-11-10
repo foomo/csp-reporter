@@ -154,13 +154,13 @@ func TestDecodeParity(t *testing.T) {
 		},
 		{
 			name: "duplicate keys in a batch entry",
-			body: `[{"type":"deprecation","type":"csp-violation","body":{"documentURL":"https://www.globus.ch/",` +
-				`"effectiveDirective":"img-src","blockedURL":"data"},"body":{"documentURL":"https://www.globus.ch/",` +
+			body: `[{"type":"deprecation","type":"csp-violation","body":{"documentURL":"https://shop.example.com/",` +
+				`"effectiveDirective":"img-src","blockedURL":"data"},"body":{"documentURL":"https://shop.example.com/",` +
 				`"effectiveDirective":"img-src","blockedURL":"blob"}}]`,
 			code: http.StatusNoContent,
 			want: snapshot{
 				"http/POST/204": 1, "received/reporting-api-array": 1, "browser/other/reporting-api-array": 1,
-				"directive": 1, "source/effective_directive": 1, "blocked/blob/enforce": 1,
+				"directive": 1, "source/effective_directive": 1, "blocked/blob/unknown": 1,
 			},
 		},
 		{
@@ -170,16 +170,16 @@ func TestDecodeParity(t *testing.T) {
 			code: http.StatusNoContent,
 			want: snapshot{
 				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1, "source/violated_directive": 1,
-				"blocked/inline/enforce": 1,
+				"blocked/inline/unknown": 1,
 			},
 		},
 		{
 			name: "invalid UTF-8 in a string",
-			body: "{\"csp-report\":{\"document-uri\":\"https://www.globus.ch/\xff\",\"violated-directive\":\"img-src\",\"blocked-uri\":\"eval\"}}",
+			body: "{\"csp-report\":{\"document-uri\":\"https://shop.example.com/\xff\",\"violated-directive\":\"img-src\",\"blocked-uri\":\"eval\"}}",
 			code: http.StatusNoContent,
 			want: snapshot{
 				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1, "source/violated_directive": 1,
-				"blocked/eval/enforce": 1,
+				"blocked/eval/unknown": 1,
 			},
 		},
 		{

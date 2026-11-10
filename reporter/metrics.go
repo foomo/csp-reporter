@@ -148,7 +148,7 @@ var httpSeries = [][2]string{
 
 var noiseReasons = []string{dropNoiseExtension, dropNoiseScheme, dropNoiseLocalhost, dropNoiseOperatorDomain}
 
-var dispositions = []string{"enforce", "report"}
+var dispositions = []string{"enforce", "report", "unknown"}
 
 var reportFormats = []string{formatLegacy, formatReportingAPIArray, formatReportingAPIObject}
 
@@ -183,7 +183,7 @@ func init() {
 		requestsRejectedCount.WithLabelValues(reason)
 	}
 	for _, kind := range blockedKinds {
-		for _, disposition := range []string{"enforce", "report"} {
+		for _, disposition := range dispositions {
 			blockedKindCount.WithLabelValues(kind, disposition)
 		}
 	}

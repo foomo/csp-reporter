@@ -76,7 +76,7 @@ func TestMetricsPreinitialised(t *testing.T) {
 		"foomo_csr_reports_received_total":  len(reportFormats),
 		"foomo_csr_reports_dropped_total":   3,
 		"foomo_csr_requests_rejected_total": len(rejectReasons),
-		"foomo_csr_blocked_kind_total":      len(blockedKinds) * 2,
+		"foomo_csr_blocked_kind_total":      len(blockedKinds) * len(dispositions),
 		"foomo_csr_directive_source_total":  len(directiveSources),
 		"foomo_csr_browser_reports_total":   len(browsers) * len(reportFormats),
 		"foomo_csr_panics_recovered_total":  1,
@@ -128,7 +128,7 @@ func takeSnapshot(t *testing.T) snapshot {
 		s["source/"+src] = testutil.ToFloat64(directiveSourceCount.WithLabelValues(src))
 	}
 	for _, k := range blockedKinds {
-		for _, d := range []string{"enforce", "report"} {
+		for _, d := range dispositions {
 			s["blocked/"+k+"/"+d] = testutil.ToFloat64(blockedKindCount.WithLabelValues(k, d))
 		}
 	}
@@ -263,10 +263,10 @@ func TestHandlerMetrics(t *testing.T) {
 			name:   "Reporting API report naming its browser",
 			method: http.MethodPost,
 			body: `[{"type":"csp-violation","user_agent":"Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",` +
-				`"body":{"documentURL":"https://www.globus.ch/","effectiveDirective":"img-src","blockedURL":"data"}}]`,
+				`"body":{"documentURL":"https://shop.example.com/","effectiveDirective":"img-src","blockedURL":"data"}}]`,
 			want: snapshot{
 				"http/POST/204": 1, "received/reporting-api-array": 1, "browser/firefox/reporting-api-array": 1,
-				"directive": 1, "source/effective_directive": 1, "blocked/data/enforce": 1,
+				"directive": 1, "source/effective_directive": 1, "blocked/data/unknown": 1,
 			},
 		},
 		{
@@ -372,10 +372,10 @@ func TestHandlerMetrics(t *testing.T) {
 }
 
 func TestHandlerContentEncoding(t *testing.T) {
-	body := `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src","blocked-uri":"data"}}`
+	body := `{"csp-report":{"document-uri":"https://shop.example.com/","violated-directive":"img-src","blocked-uri":"data"}}`
 	accepted := snapshot{
 		"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1,
-		"source/violated_directive": 1, "blocked/data/enforce": 1, "durations": 1, "bodies": 1,
+		"source/violated_directive": 1, "blocked/data/unknown": 1, "durations": 1, "bodies": 1,
 		"bodyBytes": float64(len(body)),
 	}
 	addAccepted(accepted)
@@ -410,6 +410,48 @@ func TestHandlerContentEncoding(t *testing.T) {
 	}
 }
 
+// The log line and all three metrics with a disposition label get the same normalised value.
+func TestDisposition(t *testing.T) {
+	tests := []struct{ field, want string }{
+		{`"disposition":"enforce",`, "enforce"},
+		{`"disposition":"report",`, "report"},
+		{`"disposition":"reporting",`, "report"},
+		{`"disposition":"",`, "unknown"},
+		{"", "unknown"},
+		{`"disposition":null,`, "unknown"},
+		{`"disposition":"ENFORCE",`, "unknown"},
+		{`"disposition":"Report",`, "unknown"},
+		{`"disposition":"block",`, "unknown"},
+		{`"disposition":1,`, "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.field, func(t *testing.T) {
+			counters := []prometheus.Counter{
+				violatedDirectivesCount.WithLabelValues("img-src", tt.want),
+				blockedKindCount.WithLabelValues("data", tt.want),
+				siteViolationsCount.WithLabelValues(siteOther, "img-src", tt.want),
+			}
+			var before []float64
+			for _, c := range counters {
+				before = append(before, testutil.ToFloat64(c))
+			}
+			body := `{"csp-report":{` + tt.field + `"document-uri":"https://shop.example.com/","violated-directive":"img-src","blocked-uri":"data"}}`
+			rec, logs := serve(t, http.MethodPost, "application/csp-report", body)
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204", rec.Code)
+			}
+			if reports := submitted(logs); len(reports) != 1 || reports[0]["disposition"] != tt.want {
+				t.Errorf("logged %v, want disposition %q", reports, tt.want)
+			}
+			for i, c := range counters {
+				if d := testutil.ToFloat64(c) - before[i]; d != 1 {
+					t.Errorf("counter %d with disposition %q grew by %v, want 1", i, tt.want, d)
+				}
+			}
+		})
+	}
+}
+
 // A recovered panic is answered with 500 and counted, instead of showing up as 200.
 func TestHandlerPanic(t *testing.T) {
 	var inFlight float64
@@ -421,7 +463,7 @@ func TestHandlerPanic(t *testing.T) {
 		}
 		return nil
 	}))
-	body := `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src","blocked-uri":"data"}}`
+	body := `{"csp-report":{"document-uri":"https://shop.example.com/","violated-directive":"img-src","blocked-uri":"data"}}`
 	before := takeSnapshot(t)
 	rec := httptest.NewRecorder()
 	NewHandler(log)(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
@@ -434,7 +476,7 @@ func TestHandlerPanic(t *testing.T) {
 	// Everything counted before the panic stays counted.
 	want := snapshot{
 		"http/POST/500": 1, "panics": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1,
-		"source/violated_directive": 1, "blocked/data/enforce": 1, "durations": 1, "bodies": 1,
+		"source/violated_directive": 1, "blocked/data/unknown": 1, "durations": 1, "bodies": 1,
 		"bodyBytes": float64(len(body)),
 	}
 	addAccepted(want)

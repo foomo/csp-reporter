@@ -419,13 +419,22 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
+// dispositionLabel is the disposition for the log line and the metrics; a report that names none is unknown, not enforced.
+func dispositionLabel(disposition string) string {
+	switch disposition {
+	case "enforce":
+		return "enforce"
+	// CSP3 says "report" but MDN documents "reporting", so either one means report-only.
+	case "report", "reporting":
+		return "report"
+	default:
+		return "unknown"
+	}
+}
+
 func (h *handler) logReport(report receivedReport, requestUserAgent, format string) {
 	csp := report.CSP
-	disposition := "enforce"
-	// CSP3 says "report" but MDN documents "reporting", so either one means report-only.
-	if csp.Disposition == "report" || csp.Disposition == "reporting" {
-		disposition = "report"
-	}
+	disposition := dispositionLabel(csp.Disposition)
 	userAgent := report.UserAgent
 	if userAgent == "" {
 		userAgent = requestUserAgent

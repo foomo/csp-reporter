@@ -36,9 +36,9 @@ func TestBrowserFixtures(t *testing.T) {
 		// WebKit sends Reporting API reports one at a time as a single object labelled application/csp-report.
 		{"playwright-webkit-27.2-report-to-enforce-1.json", "application/csp-report", formatReportingAPIObject, "enforce", map[string]float64{"script-src-elem": 1}},
 		{"playwright-webkit-27.2-report-to-report-only-1.json", "application/csp-report", formatReportingAPIObject, "report", map[string]float64{"script-src-elem": 1}},
-		// WebKit's legacy payload has no disposition key, so even the report-only page counts as enforce.
-		{"playwright-webkit-27.2-report-uri-enforce-1.json", "application/csp-report", formatLegacy, "enforce", map[string]float64{"script-src-elem": 1}},
-		{"playwright-webkit-27.2-report-uri-report-only-1.json", "application/csp-report", formatLegacy, "enforce", map[string]float64{"script-src-elem": 1}},
+		// WebKit's legacy payload has no disposition key, so both pages count as unknown.
+		{"playwright-webkit-27.2-report-uri-enforce-1.json", "application/csp-report", formatLegacy, "unknown", map[string]float64{"script-src-elem": 1}},
+		{"playwright-webkit-27.2-report-uri-report-only-1.json", "application/csp-report", formatLegacy, "unknown", map[string]float64{"script-src-elem": 1}},
 	}
 	// The first report's source location, as logged.
 	sourceLocations := map[string]map[string]interface{}{

@@ -19,7 +19,7 @@ func (c fixedClock) NewTicker(d time.Duration) *time.Ticker { return time.NewTic
 
 // goldenReportLine pins the log line format of a handler without options for parityLegacyReport, without the site field.
 const goldenReportLine = `{"level":"info","ts":1793534400,"msg":"content security policy report submitted",` +
-	`"disposition":"enforce","document-uri":"https://shop.example.com/cart","referrer":"",` +
+	`"disposition":"unknown","document-uri":"https://shop.example.com/cart","referrer":"",` +
 	`"violated-directive":"img-src","effective-directive":"","original-policy":"img-src 'self'",` +
 	`"blocked-uri":"https://cdn.example.net/x.png","user-agent":"request-agent","script-sample":"","status-code":200,` +
 	`"source-file":"https://shop.example.com/app.js","line-number":12,"column-number":3}`
@@ -43,7 +43,7 @@ func TestDefaultHandlerParity(t *testing.T) {
 			name: "legacy", method: http.MethodPost, body: parityLegacyReport, code: http.StatusNoContent,
 			want: snapshot{
 				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1,
-				"source/violated_directive": 1, "blocked/https/enforce": 1,
+				"source/violated_directive": 1, "blocked/https/unknown": 1,
 			},
 		},
 		{

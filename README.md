@@ -47,7 +47,7 @@ Every `POST` body is classified by its JSON shape, not its `Content-Type`:
 
 - A request records at most 100 reports; further CSP reports in the same batch are dropped and counted in `foomo_csr_reports_dropped_total{reason="batch_cap"}`.
 - `OPTIONS` and `POST` responses allow any origin: they echo the request's `Origin` (or `*` without one) in `Access-Control-Allow-Origin`, allow `POST, OPTIONS` and the `Content-Type` header; preflight answers also send `Access-Control-Max-Age: 86400`.
-- The dispositions `report` and `reporting` count as report-only; anything else counts as `enforce`. CSP3 names the value `report`, while MDN documents `reporting` for `CSPViolationReportBody`, so both are accepted.
+- The disposition `enforce` counts as `enforce`, `report` and `reporting` count as report-only (`report`), and anything else, including a missing or empty disposition and other spellings such as `ENFORCE`, counts as `unknown`, in the log line and in every metric with a `disposition` label. CSP3 names the value `report`, while MDN documents `reporting` for `CSPViolationReportBody`, so both are accepted. WebKit's legacy `report-uri` reports carry no disposition, so they count as `unknown` whether the policy enforces or only reports; in the captured Playwright WebKit fixtures, a policy that also names `report-to` produced Reporting API reports that carry the disposition.
 
 ## Running it
 
@@ -139,8 +139,8 @@ Every label value comes from a fixed set in code, never from the report, so the 
 
 | Metric | Type | Labels and allowed values |
 | --- | --- | --- |
-| `foomo_csr_violated_directive_total` | counter | `directive`: one of the directives listed below, or `unknown`; `disposition`: `enforce`, `report` |
-| `foomo_csr_blocked_kind_total` | counter | `kind`: `inline`, `eval`, `wasm_eval`, `data`, `blob`, `extension`, `https`, `http`, `other_scheme`, `empty`; `disposition`: `enforce`, `report` |
+| `foomo_csr_violated_directive_total` | counter | `directive`: one of the directives listed below, or `unknown`; `disposition`: `enforce`, `report`, `unknown` |
+| `foomo_csr_blocked_kind_total` | counter | `kind`: `inline`, `eval`, `wasm_eval`, `data`, `blob`, `extension`, `https`, `http`, `other_scheme`, `empty`; `disposition`: `enforce`, `report`, `unknown` |
 | `foomo_csr_directive_source_total` | counter | `source`: `effective_directive`, `violated_directive`, `unrecognised`, `missing` |
 | `foomo_csr_browser_reports_total` | counter | `browser`: `chrome`, `firefox`, `safari`, `edge`, `other`; `format`: as in `reports_received_total` |
 | `foomo_csr_reports_received_total` | counter | `format`: `legacy`, `reporting-api-array`, `reporting-api-object` |
@@ -158,6 +158,7 @@ Every label value comes from a fixed set in code, never from the report, so the 
 
 - `directive` is the first word of the report's effective directive when it is one of `child-src`, `connect-src`, `default-src`, `font-src`, `frame-src`, `img-src`, `manifest-src`, `media-src`, `object-src`, `prefetch-src`, `script-src`, `script-src-elem`, `script-src-attr`, `style-src`, `style-src-elem`, `style-src-attr`, `worker-src`, `base-uri`, `form-action`, `frame-ancestors` ([`reporter/constants.go`](reporter/constants.go)), otherwise the first word of the violated directive when that is one of them, otherwise `unknown`. Legacy reports whose `violated-directive` names a fallback (for example `default-src 'self'` while `effective-directive` is `img-src`) therefore count under the effective directive. Reporting API reports carry only the effective directive.
 - `foomo_csr_directive_source_total` says which field each recorded report's `directive` came from: `unrecognised` when a directive was sent but neither field is in the list, `missing` when both are empty.
+- `disposition` is `enforce`, `report` or `unknown` as described in [What it accepts](#what-it-accepts). On a site whose policy names only `report-uri`, `unknown` is steady WebKit traffic rather than an anomaly.
 - `format` is `legacy` for `{"csp-report": ...}`, `reporting-api-array` for a Reporting API batch and `reporting-api-object` for a single Reporting API report.
 - `browser` comes from the user agent that is also logged, checked in this order: `edge` when it contains `Edg/`, `EdgA/`, `EdgiOS/` or `Edge/`; `firefox` for `Firefox/` or `FxiOS/`; `chrome` for `Chrome/`, `CriOS/` or `Chromium/`, which includes other Chromium-based browsers such as Opera; `safari` for `Safari/`; `other` for everything else.
 - `foomo_csr_site_violations_total` counts every recorded report once, like `foomo_csr_violated_directive_total`, which stays unchanged; `site` follows the [Sites](#sites) rules.
