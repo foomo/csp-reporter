@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -49,7 +50,11 @@ type ContentSecurityPolicyReport struct {
 }
 
 func NewHandler(log *zap.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		w := &statusRecorder{ResponseWriter: rw, code: http.StatusOK}
+		// Registered first so it runs after the recover below and sees the final status.
+		defer func() { observeRequest(r.Method, w.code, time.Since(start)) }()
 		defer func() {
 			if r := recover(); r != nil {
 				var err error
@@ -74,17 +79,26 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 			w.WriteHeader(http.StatusNoContent)
 		case http.MethodPost:
 			setCORSHeaders(w, r)
-			reports, err := decodeReports(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+			// The server's own writer, so MaxBytesReader can still close the connection on overflow.
+			reports, stats, err := decodeReports(http.MaxBytesReader(rw, r.Body, maxBodyBytes))
+			requestBodyBytes.Observe(float64(stats.bodyBytes))
 			if errors.Is(err, errBodyTooLarge) {
+				requestsRejectedCount.WithLabelValues(rejectBodyTooLarge).Inc()
 				log.Warn("Request body too large", zap.Int("limit-bytes", maxBodyBytes))
 				http.Error(w, `{"message":"request body too large"}`, http.StatusRequestEntityTooLarge)
 				return
 			}
 			if err != nil {
+				reason := rejectMalformedJSON
+				if errors.Is(err, errUnknownReport) {
+					reason = rejectUnknownShape
+				}
+				requestsRejectedCount.WithLabelValues(reason).Inc()
 				log.Warn("Could not deserialize request", zap.Error(err))
 				http.Error(w, `{"message":"bad request data"}`, http.StatusBadRequest)
 				return
 			}
+			stats.record()
 			for _, report := range reports {
 				logReport(log, report, r.UserAgent())
 			}
@@ -92,6 +106,7 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 		case "GET":
 			_, _ = w.Write([]byte("Welcome to CSV Reporter"))
 		default:
+			requestsRejectedCount.WithLabelValues(rejectMethodNotAllowed).Inc()
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	}
@@ -177,52 +192,70 @@ func unmarshalLenient(data []byte, v interface{}) error {
 //   - one Reporting API report: {"type": "csp-violation", "body": {...}} (Safari, labelled application/csp-report)
 //
 // The JSON shape decides, not the Content-Type, because browsers label these inconsistently.
-func decodeReports(body io.Reader) ([]receivedReport, error) {
+// The stats count what was seen; only bodyBytes is meaningful when an error is returned.
+func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 	data, err := io.ReadAll(body)
+	stats := decodeStats{bodyBytes: len(data)}
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			return nil, errBodyTooLarge
+			return nil, stats, errBodyTooLarge
 		}
-		return nil, err
+		return nil, stats, err
 	}
 	trimmed := bytes.TrimLeft(data, " \t\r\n")
 	if len(trimmed) > 0 && trimmed[0] == '[' {
 		var batch []ReportingAPIReport
 		if err := unmarshalLenient(trimmed, &batch); err != nil {
-			return nil, err
+			return nil, stats, err
 		}
+		stats.format = formatReportingAPI
 		var reports []receivedReport
 		typed := false
 		for _, entry := range batch {
 			typed = typed || entry.Type != ""
-			if entry.Type == cspViolationReportType && !entry.Body.isEmpty() && len(reports) < maxReportsPerRequest {
+			switch {
+			case entry.Type != cspViolationReportType:
+				stats.nonCSPType++
+			case entry.Body.isEmpty():
+				stats.emptyBody++
+			case len(reports) < maxReportsPerRequest:
+				stats.received++
 				reports = append(reports, fromReportingAPI(entry))
+			default:
+				stats.received++
+				stats.batchCap++
 			}
 		}
 		if len(batch) > 0 && !typed {
 			// Same answer as for a single unknown object.
-			return nil, errUnknownReport
+			return nil, stats, errUnknownReport
 		}
-		return reports, nil
+		return reports, stats, nil
 	}
 	var single struct {
 		ReportingAPIReport
 		Report
 	}
 	if err := unmarshalLenient(trimmed, &single); err != nil {
-		return nil, err
+		return nil, stats, err
 	}
 	switch {
 	case single.CSP != (ContentSecurityPolicyReport{}):
-		return []receivedReport{{CSP: single.CSP}}, nil
+		stats.format, stats.received = formatLegacy, 1
+		return []receivedReport{{CSP: single.CSP}}, stats, nil
 	case single.Type == cspViolationReportType && !single.Body.isEmpty():
-		return []receivedReport{fromReportingAPI(single.ReportingAPIReport)}, nil
+		stats.format, stats.received = formatReportingAPI, 1
+		return []receivedReport{fromReportingAPI(single.ReportingAPIReport)}, stats, nil
+	case single.Type == cspViolationReportType:
+		stats.emptyBody = 1
+		return nil, stats, nil
 	case single.Type != "":
 		// Another Reporting API type sent to the same endpoint; nothing to record.
-		return nil, nil
+		stats.nonCSPType = 1
+		return nil, stats, nil
 	default:
-		return nil, errUnknownReport
+		return nil, stats, errUnknownReport
 	}
 }
 
@@ -276,6 +309,8 @@ func logReport(log *zap.Logger, report receivedReport, requestUserAgent string) 
 
 	// Increase Violated Directive (With Cardinality)
 	violatedDirectivesCount.WithLabelValues(AffectedDirective(csp), disposition).Inc()
+	blockedKindCount.WithLabelValues(blockedKind(csp.BlockedUri), disposition).Inc()
+	lastReportTimestamp.SetToCurrentTime()
 
 	log.Info("content security policy report submitted",
 		zap.String("disposition", disposition),
