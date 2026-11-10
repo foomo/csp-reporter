@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
@@ -32,6 +34,15 @@ func submitted(logs *observer.ObservedLogs) []map[string]interface{} {
 		fields = append(fields, entry.ContextMap())
 	}
 	return fields
+}
+
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	return m.GetCounter().GetValue()
 }
 
 func TestHandlerPreflight(t *testing.T) {
@@ -70,25 +81,32 @@ func TestHandlerLegacyReport(t *testing.T) {
 }
 
 func TestHandlerReportingAPIBatch(t *testing.T) {
+	counter := violatedDirectivesCount.WithLabelValues("style-src-attr", "report")
+	before := counterValue(t, counter)
 	body := `[
 	  {"type":"deprecation","age":1,"url":"https://www.globus.ch/","user_agent":"Chrome","body":{"id":"x"}},
 	  {"type":"csp-violation","age":2,"url":"https://www.globus.ch/damen","user_agent":"Chrome/156",
 	   "body":{"documentURL":"https://www.globus.ch/damen","blockedURL":"https://example.com/probe",
-	   "effectiveDirective":"connect-src","disposition":"report","statusCode":200,"sample":""}}
+	   "effectiveDirective":"connect-src","originalPolicy":"default-src 'self'","disposition":"report",
+	   "statusCode":200,"sample":""}},
+	  {"type":"csp-violation","age":3,"url":"https://www.globus.ch/herren","user_agent":"Chrome/156",
+	   "body":{"documentURL":"https://www.globus.ch/herren","blockedURL":"inline",
+	   "effectiveDirective":"style-src-attr","disposition":"report","statusCode":200}}
 	]`
 	rec, logs := serve(t, http.MethodPost, "application/reports+json", body)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
 	}
 	reports := submitted(logs)
-	if len(reports) != 1 {
-		t.Fatalf("logged %d reports, want 1 (the deprecation report is skipped)", len(reports))
+	if len(reports) != 2 {
+		t.Fatalf("logged %d reports, want 2 (the deprecation report is skipped)", len(reports))
 	}
 	want := map[string]interface{}{
 		"document-uri":        "https://www.globus.ch/damen",
 		"blocked-uri":         "https://example.com/probe",
 		"effective-directive": "connect-src",
 		"violated-directive":  "connect-src",
+		"original-policy":     "default-src 'self'",
 		"disposition":         "report",
 		"user-agent":          "Chrome/156",
 	}
@@ -96,6 +114,79 @@ func TestHandlerReportingAPIBatch(t *testing.T) {
 		if reports[0][k] != v {
 			t.Errorf("%s = %v, want %v", k, reports[0][k], v)
 		}
+	}
+	if reports[1]["effective-directive"] != "style-src-attr" {
+		t.Errorf("second report effective-directive = %v, want style-src-attr", reports[1]["effective-directive"])
+	}
+	if got := counterValue(t, counter) - before; got != 1 {
+		t.Errorf("violated_directive_total{style-src-attr,report} grew by %v, want 1", got)
+	}
+}
+
+// A value of the wrong JSON type costs only that field, not the report or the rest of the batch.
+func TestHandlerMistypedFields(t *testing.T) {
+	valid := `{"type":"csp-violation","body":{"documentURL":"https://www.globus.ch/","effectiveDirective":"img-src"}}`
+	tests := map[string]string{
+		"mistyped field in a skipped entry": `[{"type":"x","body":{"statusCode":"200"}},` + valid + `]`,
+		"string body in a skipped entry":    `[{"type":"x","body":"oops"},` + valid + `]`,
+		"legacy status-code as string": `{"csp-report":{"document-uri":"https://www.globus.ch/",` +
+			`"violated-directive":"img-src","status-code":"200"}}`,
+	}
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			rec, logs := serve(t, http.MethodPost, "application/reports+json", body)
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+			}
+			reports := submitted(logs)
+			if len(reports) != 1 || reports[0]["document-uri"] != "https://www.globus.ch/" {
+				t.Errorf("logged %v, want the one valid report", reports)
+			}
+		})
+	}
+}
+
+func TestHandlerEmptyViolationBody(t *testing.T) {
+	for _, body := range []string{`{"type":"csp-violation"}`, `[{"type":"csp-violation","body":null}]`} {
+		rec, logs := serve(t, http.MethodPost, "application/reports+json", body)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("%s: status = %d, want %d", body, rec.Code, http.StatusNoContent)
+		}
+		if n := len(submitted(logs)); n != 0 {
+			t.Errorf("%s: logged %d reports, want 0", body, n)
+		}
+	}
+}
+
+func TestHandlerUnknownBatch(t *testing.T) {
+	rec, logs := serve(t, http.MethodPost, "application/reports+json", `[{"hello":"world"}]`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if n := len(submitted(logs)); n != 0 {
+		t.Errorf("logged %d reports for an unknown batch, want 0", n)
+	}
+}
+
+func TestHandlerBatchCap(t *testing.T) {
+	entry := `{"type":"csp-violation","body":{"documentURL":"https://www.globus.ch/","effectiveDirective":"img-src"}}`
+	body := "[" + strings.Repeat(entry+",", maxReportsPerRequest+50) + entry + "]"
+	rec, logs := serve(t, http.MethodPost, "application/reports+json", body)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if n := len(submitted(logs)); n != maxReportsPerRequest {
+		t.Errorf("logged %d reports, want %d", n, maxReportsPerRequest)
+	}
+}
+
+func TestHandlerBodyTooLarge(t *testing.T) {
+	rec, logs := serve(t, http.MethodPost, "application/reports+json", "["+strings.Repeat(" ", maxBodyBytes)+"]")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+	if n := len(submitted(logs)); n != 0 {
+		t.Errorf("logged %d reports for an oversized body, want 0", n)
 	}
 }
 

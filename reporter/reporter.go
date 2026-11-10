@@ -75,6 +75,11 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 		case http.MethodPost:
 			setCORSHeaders(w, r)
 			reports, err := decodeReports(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+			if errors.Is(err, errBodyTooLarge) {
+				log.Warn("Request body too large", zap.Int("limit-bytes", maxBodyBytes))
+				http.Error(w, `{"message":"request body too large"}`, http.StatusRequestEntityTooLarge)
+				return
+			}
 			if err != nil {
 				log.Warn("Could not deserialize request", zap.Error(err))
 				http.Error(w, `{"message":"bad request data"}`, http.StatusBadRequest)
@@ -107,6 +112,10 @@ func AffectedDirective(cspr ContentSecurityPolicyReport) string {
 // maxBodyBytes caps one request; a Reporting API batch of CSP reports stays far below it.
 const maxBodyBytes = 1 << 20
 
+// maxReportsPerRequest caps the reports recorded from one batch, so one request cannot flood the
+// log and the metric; a browser batch stays far below it. Reports beyond the cap are dropped.
+const maxReportsPerRequest = 100
+
 // cspViolationReportType is the Reporting API type of CSP reports. Browsers also send other types
 // (deprecation, intervention) to the endpoint named "default"; those are skipped.
 const cspViolationReportType = "csp-violation"
@@ -133,6 +142,12 @@ type CSPViolationReportBody struct {
 	StatusCode         int    `json:"statusCode"`
 }
 
+// isEmpty is true for a missing, null or mistyped body: every CSP violation names its document
+// and directive.
+func (b CSPViolationReportBody) isEmpty() bool {
+	return b.DocumentURL == "" && b.EffectiveDirective == ""
+}
+
 // receivedReport is a CSP report from either format, with the user agent the report names, if any.
 type receivedReport struct {
 	CSP       ContentSecurityPolicyReport
@@ -141,6 +156,20 @@ type receivedReport struct {
 
 // errUnknownReport is returned for JSON that is neither a legacy nor a Reporting API CSP report.
 var errUnknownReport = errors.New("body is not a CSP report")
+
+// errBodyTooLarge is returned for a body over maxBodyBytes.
+var errBodyTooLarge = errors.New("request body too large")
+
+// unmarshalLenient ignores values of the wrong JSON type: encoding/json skips them and still
+// fills every other field, so one mistyped field does not cost the report or the whole batch.
+func unmarshalLenient(data []byte, v interface{}) error {
+	err := json.Unmarshal(data, v)
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return nil
+	}
+	return err
+}
 
 // decodeReports reads the three shapes browsers send:
 //   - legacy report-uri: {"csp-report": {...}} (Firefox, older browsers)
@@ -151,33 +180,43 @@ var errUnknownReport = errors.New("body is not a CSP report")
 func decodeReports(body io.Reader) ([]receivedReport, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
+		// http.MaxBytesReader; the typed *http.MaxBytesError needs go 1.19, go.mod is on 1.17.
+		if err.Error() == "http: request body too large" {
+			return nil, errBodyTooLarge
+		}
 		return nil, err
 	}
 	trimmed := bytes.TrimLeft(data, " \t\r\n")
 	if len(trimmed) > 0 && trimmed[0] == '[' {
 		var batch []ReportingAPIReport
-		if err := json.Unmarshal(trimmed, &batch); err != nil {
+		if err := unmarshalLenient(trimmed, &batch); err != nil {
 			return nil, err
 		}
-		reports := make([]receivedReport, 0, len(batch))
+		var reports []receivedReport
+		typed := false
 		for _, entry := range batch {
-			if entry.Type == cspViolationReportType {
+			typed = typed || entry.Type != ""
+			if entry.Type == cspViolationReportType && !entry.Body.isEmpty() && len(reports) < maxReportsPerRequest {
 				reports = append(reports, fromReportingAPI(entry))
 			}
+		}
+		if len(batch) > 0 && !typed {
+			// Same answer as for a single unknown object.
+			return nil, errUnknownReport
 		}
 		return reports, nil
 	}
 	var single struct {
 		ReportingAPIReport
-		CSP *ContentSecurityPolicyReport `json:"csp-report"`
+		Report
 	}
-	if err := json.Unmarshal(trimmed, &single); err != nil {
+	if err := unmarshalLenient(trimmed, &single); err != nil {
 		return nil, err
 	}
 	switch {
-	case single.CSP != nil:
-		return []receivedReport{{CSP: *single.CSP}}, nil
-	case single.Type == cspViolationReportType:
+	case single.CSP != (ContentSecurityPolicyReport{}):
+		return []receivedReport{{CSP: single.CSP}}, nil
+	case single.Type == cspViolationReportType && !single.Body.isEmpty():
 		return []receivedReport{fromReportingAPI(single.ReportingAPIReport)}, nil
 	case single.Type != "":
 		// Another Reporting API type sent to the same endpoint; nothing to record.
@@ -244,7 +283,7 @@ func logReport(log *zap.Logger, report receivedReport, requestUserAgent string) 
 		zap.String("referrer", csp.Referrer),
 		zap.String("violated-directive", csp.ViolatedDirective),
 		zap.String("effective-directive", csp.EffectiveDirective),
-		zap.String("original-policy", csp.EffectiveDirective),
+		zap.String("original-policy", csp.OriginalPolicy),
 		zap.String("blocked-uri", csp.BlockedUri),
 		zap.String("user-agent", userAgent),
 		zap.String("script-sample", csp.ScriptSample),

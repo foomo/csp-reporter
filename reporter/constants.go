@@ -18,7 +18,10 @@ var (
 		"script-src-attr": {},
 		"style-src":       {},
 		"style-src-elem":  {},
+		"style-src-attr":  {},
 		"worker-src":      {},
 		"base-uri":        {},
+		"form-action":     {},
+		"frame-ancestors": {},
 	}
 )
