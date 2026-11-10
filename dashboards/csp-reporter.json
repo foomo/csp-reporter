@@ -42,7 +42,7 @@
     {
       "type": "stat",
       "title": "Rejected requests",
-      "description": "Share of requests to the report handler answered with 400, 405 or 413.",
+      "description": "Share of requests to the report handler answered with 400, 405, 413 or 415.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "fieldConfig": {
@@ -176,7 +176,7 @@
     {
       "type": "piechart",
       "title": "Report format in range",
-      "description": "Legacy report-uri reports versus Reporting API reports, before the per-request cap.",
+      "description": "Legacy report-uri reports, Reporting API batches (reporting-api-array) and single Reporting API reports (reporting-api-object), before the per-request cap.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 7, "w": 6, "x": 18, "y": 12 },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },

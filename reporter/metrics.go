@@ -14,8 +14,9 @@ import (
 // series count stays bounded whatever browsers or attackers send.
 
 const (
-	formatLegacy       = "legacy"
-	formatReportingAPI = "reporting-api"
+	formatLegacy             = "legacy"
+	formatReportingAPIArray  = "reporting-api-array"
+	formatReportingAPIObject = "reporting-api-object"
 
 	dropNonCSPType = "non_csp_type"
 	dropEmptyBody  = "empty_body"
@@ -93,13 +94,42 @@ var (
 		Name:      "last_report_timestamp_seconds",
 		Help:      "Unix time of the most recently recorded report",
 	})
+	httpRequestsInFlight = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: metricsNamespace,
+		Subsystem: metricsSubsystem,
+		Name:      "http_requests_in_flight",
+		Help:      "Requests the report handler is answering right now",
+	})
+	reportsPerRequest = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: metricsNamespace,
+		Subsystem: metricsSubsystem,
+		Name:      "reports_per_request",
+		Help:      "CSP reports recognised per accepted POST request, before the per-request cap",
+		Buckets:   []float64{1, 2, 5, 10, 25, 50, maxReportsPerRequest},
+	})
+	browserReportsCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: metricsSubsystem,
+		Name:      "browser_reports_total",
+		Help:      "Counts recorded reports by browser family of the user agent and by format",
+	}, []string{"browser", "format"})
+	panicsRecoveredCount = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: metricsSubsystem,
+		Name:      "panics_recovered_total",
+		Help:      "Counts panics in the report handler that were recovered and answered with 500",
+	})
 )
 
 // httpSeries are the method and code pairs the handler can produce.
 var httpSeries = [][2]string{
 	{http.MethodOptions, "204"}, {http.MethodPost, "204"}, {http.MethodPost, "400"}, {http.MethodPost, "413"},
-	{http.MethodPost, "415"}, {http.MethodGet, "200"}, {methodOther, "405"},
+	{http.MethodPost, "415"}, {http.MethodPost, "500"}, {http.MethodGet, "200"}, {methodOther, "405"},
 }
+
+var reportFormats = []string{formatLegacy, formatReportingAPIArray, formatReportingAPIObject}
+
+var browsers = []string{"chrome", "firefox", "safari", "edge", "other"}
 
 var rejectReasons = []string{
 	rejectBodyTooLarge, rejectMalformedJSON, rejectUnknownShape, rejectMethodNotAllowed, rejectReadError,
@@ -117,8 +147,11 @@ func init() {
 	for _, mc := range httpSeries {
 		httpRequestsCount.WithLabelValues(mc[0], mc[1])
 	}
-	for _, format := range []string{formatLegacy, formatReportingAPI} {
+	for _, format := range reportFormats {
 		reportsReceivedCount.WithLabelValues(format)
+		for _, browser := range browsers {
+			browserReportsCount.WithLabelValues(browser, format)
+		}
 	}
 	for _, reason := range []string{dropNonCSPType, dropEmptyBody, dropBatchCap} {
 		reportsDroppedCount.WithLabelValues(reason)
@@ -152,17 +185,27 @@ func (s decodeStats) record() {
 	reportsDroppedCount.WithLabelValues(dropNonCSPType).Add(float64(s.nonCSPType))
 	reportsDroppedCount.WithLabelValues(dropEmptyBody).Add(float64(s.emptyBody))
 	reportsDroppedCount.WithLabelValues(dropBatchCap).Add(float64(s.batchCap))
+	reportsPerRequest.Observe(float64(s.received))
 }
 
-// statusRecorder keeps the status code written, which is 200 unless WriteHeader says otherwise.
+// statusRecorder keeps the status code sent, which is 200 unless WriteHeader says otherwise.
 type statusRecorder struct {
 	http.ResponseWriter
 	code int
+	// written is set once the status is sent and can no longer change.
+	written bool
 }
 
 func (s *statusRecorder) WriteHeader(code int) {
-	s.code = code
+	if !s.written {
+		s.code, s.written = code, true
+	}
 	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	s.written = true
+	return s.ResponseWriter.Write(b)
 }
 
 func observeRequest(method string, code int, elapsed time.Duration) {
@@ -173,6 +216,25 @@ func observeRequest(method string, code int, elapsed time.Duration) {
 	}
 	httpRequestsCount.WithLabelValues(method, strconv.Itoa(code)).Inc()
 	httpRequestDuration.Observe(elapsed.Seconds())
+}
+
+// browserFamily maps a user agent to one of browsers. The order matters: Edge user agents also
+// name Chrome and Safari, and Chrome ones name Safari.
+func browserFamily(userAgent string) string {
+	switch {
+	case strings.Contains(userAgent, "Edg/") || strings.Contains(userAgent, "EdgA/") ||
+		strings.Contains(userAgent, "EdgiOS/") || strings.Contains(userAgent, "Edge/"):
+		return "edge"
+	case strings.Contains(userAgent, "Firefox/") || strings.Contains(userAgent, "FxiOS/"):
+		return "firefox"
+	case strings.Contains(userAgent, "Chrome/") || strings.Contains(userAgent, "CriOS/") ||
+		strings.Contains(userAgent, "Chromium/"):
+		return "chrome"
+	case strings.Contains(userAgent, "Safari/"):
+		return "safari"
+	default:
+		return "other"
+	}
 }
 
 // blockedKind classifies a blocked URI, which is a CSP3 keyword (inline, eval, wasm-eval), a bare

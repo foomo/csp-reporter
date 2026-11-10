@@ -53,6 +53,8 @@ type ContentSecurityPolicyReport struct {
 func NewHandler(log *zap.Logger) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		httpRequestsInFlight.Inc()
+		defer httpRequestsInFlight.Dec()
 		w := &statusRecorder{ResponseWriter: rw, code: http.StatusOK}
 		// Registered first so it runs after the recover below and sees the final status.
 		defer func() { observeRequest(r.Method, w.code, time.Since(start)) }()
@@ -67,7 +69,11 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 				default:
 					err = errors.New("unknown error")
 				}
+				panicsRecoveredCount.Inc()
 				log.With(zap.Error(err)).Error("Panic occurred in http handler")
+				if !w.written {
+					http.Error(w, `{"message":"internal error"}`, http.StatusInternalServerError)
+				}
 			}
 		}()
 
@@ -110,7 +116,7 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 			}
 			stats.record()
 			for _, report := range reports {
-				logReport(log, report, r.UserAgent())
+				logReport(log, report, r.UserAgent(), stats.format)
 			}
 			w.WriteHeader(http.StatusNoContent)
 		case "GET":
@@ -237,7 +243,7 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 		return nil, stats, errMalformedJSON
 	}
 	if trimmed[0] == '[' {
-		stats.format = formatReportingAPI
+		stats.format = formatReportingAPIArray
 		// One entry at a time, so a huge batch costs no more memory than its largest entry.
 		dec := json.NewDecoder(bytes.NewReader(trimmed))
 		if _, err := dec.Token(); err != nil {
@@ -292,7 +298,7 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 		stats.format, stats.received = formatLegacy, 1
 		return []receivedReport{{CSP: single.CSP}}, stats, nil
 	case single.Type == cspViolationReportType && !single.Body.isEmpty():
-		stats.format, stats.received = formatReportingAPI, 1
+		stats.format, stats.received = formatReportingAPIObject, 1
 		return []receivedReport{fromReportingAPI(single.ReportingAPIReport)}, stats, nil
 	case single.Type == cspViolationReportType:
 		stats.emptyBody = 1
@@ -343,7 +349,7 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
-func logReport(log *zap.Logger, report receivedReport, requestUserAgent string) {
+func logReport(log *zap.Logger, report receivedReport, requestUserAgent, format string) {
 	csp := report.CSP
 	disposition := "enforce"
 	// CSP3 says "report" but MDN documents "reporting", so either one means report-only.
@@ -360,6 +366,7 @@ func logReport(log *zap.Logger, report receivedReport, requestUserAgent string) 
 	violatedDirectivesCount.WithLabelValues(directive, disposition).Inc()
 	directiveSourceCount.WithLabelValues(source).Inc()
 	blockedKindCount.WithLabelValues(blockedKind(csp.BlockedUri), disposition).Inc()
+	browserReportsCount.WithLabelValues(browserFamily(userAgent), format).Inc()
 	lastReportTimestamp.SetToCurrentTime()
 
 	log.Info("content security policy report submitted",

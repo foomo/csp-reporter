@@ -36,7 +36,7 @@ func TestDecodeParity(t *testing.T) {
 				`"blocked-uri":"data","disposition":"report"}}`,
 			code: http.StatusNoContent,
 			want: snapshot{
-				"http/POST/204": 1, "received/legacy": 1, "directive": 1, "source/violated_directive": 1,
+				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1, "source/violated_directive": 1,
 				"blocked/data/report": 1,
 			},
 		},
@@ -45,8 +45,9 @@ func TestDecodeParity(t *testing.T) {
 			body: "[\n  " + strings.Join(mixed, " ,\n\t") + "\n]\n",
 			code: http.StatusNoContent,
 			want: snapshot{
-				"http/POST/204": 1, "received/reporting-api": maxReportsPerRequest + 20, "dropped/batch_cap": 20,
-				"dropped/non_csp_type": 3, "dropped/empty_body": 6,
+				"http/POST/204": 1, "received/reporting-api-array": maxReportsPerRequest + 20, "dropped/batch_cap": 20,
+				"browser/other/reporting-api-array": maxReportsPerRequest,
+				"dropped/non_csp_type":              3, "dropped/empty_body": 6,
 				"directive": maxReportsPerRequest, "source/effective_directive": maxReportsPerRequest,
 				"blocked/https/enforce": maxReportsPerRequest,
 			},
@@ -56,8 +57,8 @@ func TestDecodeParity(t *testing.T) {
 			body: valid,
 			code: http.StatusNoContent,
 			want: snapshot{
-				"http/POST/204": 1, "received/reporting-api": 1, "directive": 1, "source/effective_directive": 1,
-				"blocked/https/enforce": 1,
+				"http/POST/204": 1, "received/reporting-api-object": 1, "browser/other/reporting-api-object": 1,
+				"directive": 1, "source/effective_directive": 1, "blocked/https/enforce": 1,
 			},
 		},
 		{name: "empty array", body: `[]`, code: http.StatusNoContent, want: snapshot{"http/POST/204": 1}},
@@ -91,7 +92,7 @@ func TestDecodeParity(t *testing.T) {
 			body: "[0," + valid + "]",
 			code: http.StatusNoContent,
 			want: snapshot{
-				"http/POST/204": 1, "received/reporting-api": 1, "dropped/non_csp_type": 1, "directive": 1,
+				"http/POST/204": 1, "received/reporting-api-array": 1, "browser/other/reporting-api-array": 1, "dropped/non_csp_type": 1, "directive": 1,
 				"source/effective_directive": 1, "blocked/https/enforce": 1,
 			},
 		},
@@ -100,7 +101,7 @@ func TestDecodeParity(t *testing.T) {
 			body: "[" + valid + ",null]",
 			code: http.StatusNoContent,
 			want: snapshot{
-				"http/POST/204": 1, "received/reporting-api": 1, "dropped/non_csp_type": 1, "directive": 1,
+				"http/POST/204": 1, "received/reporting-api-array": 1, "browser/other/reporting-api-array": 1, "dropped/non_csp_type": 1, "directive": 1,
 				"source/effective_directive": 1, "blocked/https/enforce": 1,
 			},
 		},
@@ -159,8 +160,8 @@ func TestDecodeParity(t *testing.T) {
 				`"effectiveDirective":"img-src","blockedURL":"blob"}}]`,
 			code: http.StatusNoContent,
 			want: snapshot{
-				"http/POST/204": 1, "received/reporting-api": 1, "directive": 1, "source/effective_directive": 1,
-				"blocked/blob/enforce": 1,
+				"http/POST/204": 1, "received/reporting-api-array": 1, "browser/other/reporting-api-array": 1,
+				"directive": 1, "source/effective_directive": 1, "blocked/blob/enforce": 1,
 			},
 		},
 		{
@@ -169,7 +170,7 @@ func TestDecodeParity(t *testing.T) {
 				`"csp-report":{"violated-directive":"img-src","blocked-uri":"inline"}}`,
 			code: http.StatusNoContent,
 			want: snapshot{
-				"http/POST/204": 1, "received/legacy": 1, "directive": 1, "source/violated_directive": 1,
+				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1, "source/violated_directive": 1,
 				"blocked/inline/enforce": 1,
 			},
 		},
@@ -178,7 +179,7 @@ func TestDecodeParity(t *testing.T) {
 			body: "{\"csp-report\":{\"document-uri\":\"https://www.globus.ch/\xff\",\"violated-directive\":\"img-src\",\"blocked-uri\":\"eval\"}}",
 			code: http.StatusNoContent,
 			want: snapshot{
-				"http/POST/204": 1, "received/legacy": 1, "directive": 1, "source/violated_directive": 1,
+				"http/POST/204": 1, "received/legacy": 1, "browser/other/legacy": 1, "directive": 1, "source/violated_directive": 1,
 				"blocked/eval/enforce": 1,
 			},
 		},
@@ -200,6 +201,9 @@ func TestDecodeParity(t *testing.T) {
 			tt.want["durations"] = 1
 			tt.want["bodies"] = 1
 			tt.want["bodyBytes"] = math.Min(float64(len(tt.body)), maxBodyBytes)
+			if tt.code == http.StatusNoContent {
+				addAccepted(tt.want)
+			}
 			before := takeSnapshot(t)
 			rec, _ := serve(t, http.MethodPost, "application/reports+json", tt.body)
 			if rec.Code != tt.code {
