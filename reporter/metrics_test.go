@@ -136,6 +136,25 @@ func (s snapshot) delta(before snapshot) snapshot {
 	return d
 }
 
+// checkDelta fails for every series that did not grow by exactly what want says.
+func checkDelta(t *testing.T, got, want snapshot) {
+	t.Helper()
+	for k := range want {
+		if got[k] != want[k] {
+			t.Errorf("%s grew by %v, want %v", k, got[k], want[k])
+		}
+	}
+	for k, v := range got {
+		if _, ok := want[k]; !ok {
+			t.Errorf("%s grew by %v, want 0", k, v)
+		}
+	}
+	// Recorded reports are the received ones minus those beyond the cap.
+	if received := got["received/legacy"] + got["received/reporting-api"]; got["directive"] != received-got["dropped/batch_cap"] {
+		t.Errorf("recorded %v reports, received %v and capped %v", got["directive"], received, got["dropped/batch_cap"])
+	}
+}
+
 func sumCounters(t *testing.T, c prometheus.Collector) float64 {
 	t.Helper()
 	ch := make(chan prometheus.Metric)
@@ -270,21 +289,7 @@ func TestHandlerMetrics(t *testing.T) {
 			before := takeSnapshot(t)
 			serve(t, tt.method, "application/reports+json", tt.body)
 			got := takeSnapshot(t).delta(before)
-
-			for k := range tt.want {
-				if got[k] != tt.want[k] {
-					t.Errorf("%s grew by %v, want %v", k, got[k], tt.want[k])
-				}
-			}
-			for k, v := range got {
-				if _, ok := tt.want[k]; !ok {
-					t.Errorf("%s grew by %v, want 0", k, v)
-				}
-			}
-			// Recorded reports are the received ones minus those beyond the cap.
-			if received := got["received/legacy"] + got["received/reporting-api"]; got["directive"] != received-got["dropped/batch_cap"] {
-				t.Errorf("recorded %v reports, received %v and capped %v", got["directive"], received, got["dropped/batch_cap"])
-			}
+			checkDelta(t, got, tt.want)
 			if got["directive"] > 0 {
 				if ts := testutil.ToFloat64(lastReportTimestamp); ts < start {
 					t.Errorf("last_report_timestamp_seconds = %v, want at least %v", ts, start)
