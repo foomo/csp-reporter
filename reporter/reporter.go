@@ -364,14 +364,14 @@ func logReport(log *zap.Logger, report receivedReport, requestUserAgent string) 
 
 	log.Info("content security policy report submitted",
 		zap.String("disposition", disposition),
-		zap.String("document-uri", csp.DocumentUri),
-		zap.String("referrer", csp.Referrer),
-		zap.String("violated-directive", csp.ViolatedDirective),
-		zap.String("effective-directive", csp.EffectiveDirective),
-		zap.String("original-policy", csp.OriginalPolicy),
-		zap.String("blocked-uri", csp.BlockedUri),
-		zap.String("user-agent", userAgent),
-		zap.String("script-sample", csp.ScriptSample),
+		zap.String("document-uri", loggedURI(csp.DocumentUri)),
+		zap.String("referrer", loggedURI(csp.Referrer)),
+		zap.String("violated-directive", capBytes(csp.ViolatedDirective, maxLoggedPolicyBytes)),
+		zap.String("effective-directive", capBytes(csp.EffectiveDirective, maxLoggedPolicyBytes)),
+		zap.String("original-policy", capBytes(csp.OriginalPolicy, maxLoggedPolicyBytes)),
+		zap.String("blocked-uri", loggedURI(csp.BlockedUri)),
+		zap.String("user-agent", capBytes(userAgent, maxLoggedValueBytes)),
+		zap.String("script-sample", capRunes(csp.ScriptSample, maxLoggedSampleRunes)),
 		zap.Int("status-code", csp.StatusCode),
 	)
 }
