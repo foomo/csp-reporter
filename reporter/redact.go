@@ -25,25 +25,24 @@ func redactURI(uri string) string {
 	if i := strings.IndexAny(uri, "?#"); i >= 0 {
 		uri = uri[:i]
 	}
-	var start int
-	switch slashes := strings.Index(uri, "//"); {
-	case slashes == 0 || slashes > 0 && hasScheme(uri):
-		start = slashes + 2
-	case hasScheme(uri):
-		// No "//", as in mailto:user@host; whatever precedes an @ is still treated as userinfo.
-		start = strings.IndexByte(uri, ':') + 1
-	default:
-		// CSP keywords (inline, eval), bare schemes (data, blob) and relative values.
+	// The host ends at the first slash that follows neither a slash nor a colon, whatever the scheme looks like.
+	hostEnd := len(uri)
+	for i := 1; i < len(uri); i++ {
+		if uri[i] == '/' && !strings.ContainsRune(`/\:`, rune(uri[i-1])) {
+			hostEnd = i
+			break
+		}
+	}
+	at := strings.LastIndexByte(uri[:hostEnd], '@')
+	if at < 0 {
 		return uri
 	}
-	authority := uri[start:]
-	if end := strings.IndexByte(authority, '/'); end >= 0 {
-		authority = authority[:end]
+	start := strings.LastIndexByte(uri[:at], '/') + 1
+	if start == 0 && hasScheme(uri) {
+		// No slash, as in mailto:user@host: keep only the scheme.
+		start = strings.IndexByte(uri, ':') + 1
 	}
-	if at := strings.LastIndexByte(authority, '@'); at >= 0 {
-		uri = uri[:start] + uri[start+at+1:]
-	}
-	return uri
+	return uri[:start] + uri[at+1:]
 }
 
 // hasScheme reports whether s starts with an RFC 3986 scheme and a colon.
@@ -63,9 +62,19 @@ func hasScheme(s string) bool {
 	return true
 }
 
-// capBytes replaces invalid UTF-8 and cuts s to at most n bytes without splitting a character.
+// sanitize replaces invalid UTF-8, and the controls zap's JSON encoder writes unescaped (DEL, C1, U+2028, U+2029).
+func sanitize(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == 0x7f || 0x80 <= r && r <= 0x9f || r == ' ' || r == ' ' {
+			return utf8.RuneError
+		}
+		return r
+	}, strings.ToValidUTF8(s, string(utf8.RuneError)))
+}
+
+// capBytes sanitizes s and cuts it to at most n bytes without splitting a character.
 func capBytes(s string, n int) string {
-	s = strings.ToValidUTF8(s, string(utf8.RuneError))
+	s = sanitize(s)
 	if len(s) <= n {
 		return s
 	}
@@ -75,9 +84,9 @@ func capBytes(s string, n int) string {
 	return s[:n]
 }
 
-// capRunes replaces invalid UTF-8 and cuts s to at most n characters.
+// capRunes sanitizes s and cuts it to at most n characters.
 func capRunes(s string, n int) string {
-	s = strings.ToValidUTF8(s, string(utf8.RuneError))
+	s = sanitize(s)
 	for i := range s {
 		if n == 0 {
 			return s[:i]

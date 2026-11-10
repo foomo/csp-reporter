@@ -34,9 +34,19 @@ func TestLoggedURI(t *testing.T) {
 		{"nested URL", "blob:https://user:pw@example.com/1234", "blob:https://example.com/1234"},
 		{"scheme without slashes", "mailto:someone@example.com?subject=x", "mailto:example.com"},
 		{"data URL", "data:image/png;base64,AAAA", "data:image/png;base64,AAAA"},
+		{"@ in a data URL", "data:text/plain,a@b", "data:text/plain,a@b"},
+		{"three leading slashes", "///user:pw@example.com/p", "///example.com/p"},
+		{"one slash after the scheme", "https:/user:pw@example.com/p", "https:/example.com/p"},
+		{"three slashes after the scheme", "https:///user:pw@host/p", "https:///host/p"},
+		{"backslashes", `https:\\user:pw@host\p`, `https:host\p`},
+		{"leading space", " https://user:pw@example.com/", " https://example.com/"},
+		{"bytes before the scheme", "x\xffhttps://u:p@h/", "x�https://h/"},
+		{"double slash after a mailto host", "mailto:user@host//x", "mailto:host//x"},
+		{"invalid scheme", "user name:pw@example.com/p", "example.com/p"},
 		{"relative value", "example.com/p?token=1", "example.com/p"},
 		{"empty", "", ""},
 		{"invalid UTF-8", "https://example.com/\xff\xfe/p", "https://example.com/�/p"},
+		{"DEL, C1 and line separators", "https://example.com/\x7f\u0085\xe2\x80\xa8\xe2\x80\xa9", "https://example.com/����"},
 		{"10 KiB URL", longPath + "?token=1", longPath[:maxLoggedValueBytes]},
 		{
 			"multi-byte text cut at the cap",
@@ -67,6 +77,7 @@ func TestCapRunes(t *testing.T) {
 		{"short", 40, "short"},
 		{strings.Repeat("é", 41), 40, strings.Repeat("é", 40)},
 		{"ab\xffcd", 3, "ab�"},
+		{"a\x7fb\u009bc\xe2\x80\xa8d\xe2\x80\xa9e", 40, "a�b�c�d�e"},
 	}
 	for _, tt := range tests {
 		if got := capRunes(tt.s, tt.n); got != tt.want {
@@ -79,7 +90,7 @@ func TestCapRunes(t *testing.T) {
 func TestLogLineEscaping(t *testing.T) {
 	var buf bytes.Buffer
 	log := zap.New(zapcore.NewCore(zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), zapcore.AddSync(&buf), zap.InfoLevel))
-	body := `[{"type":"csp-violation","user_agent":"evil\n{\"level\":\"error\"} ",` +
+	body := `[{"type":"csp-violation","user_agent":"evil\n{\"level\":\"error\"}` + "\xe2\x80\xa8" + `",` +
 		`"body":{"documentURL":"https://www.globus.ch/\n\"x\"\u0000\u001b[31m","effectiveDirective":"script-src",` +
 		`"blockedURL":"inline","sample":"alert(\"\r\n\t\u0007\")","originalPolicy":"default-src 'none'\n"}}]`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
@@ -99,7 +110,7 @@ func TestLogLineEscaping(t *testing.T) {
 	}
 	want := map[string]string{
 		"document-uri":    "https://www.globus.ch/\n\"x\"\u0000\u001b[31m",
-		"user-agent":      "evil\n{\"level\":\"error\"} ",
+		"user-agent":      "evil\n{\"level\":\"error\"}�",
 		"script-sample":   "alert(\"\r\n\t\u0007\")",
 		"original-policy": "default-src 'none'\n",
 	}
