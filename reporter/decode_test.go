@@ -81,6 +81,12 @@ func TestDecodeParity(t *testing.T) {
 			want: snapshot{"http/POST/400": 1, "rejected/unknown_shape": 1},
 		},
 		{
+			name: "legacy object with only a source location",
+			body: `{"csp-report":{"source-file":"https://shop.example.com/a.js","line-number":5,"column-number":2}}`,
+			code: http.StatusBadRequest,
+			want: snapshot{"http/POST/400": 1, "rejected/unknown_shape": 1},
+		},
+		{
 			name: "report nested in an array",
 			body: "[[" + valid + "]]",
 			code: http.StatusBadRequest,

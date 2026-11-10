@@ -375,8 +375,11 @@ func decodeFilteredReports(body io.Reader, noise *noiseFilter) ([]receivedReport
 		return nil, stats, err
 	}
 	var report receivedReport
+	// A source location alone names no violation, as for Reporting API bodies.
+	withoutLocation := single.CSP
+	withoutLocation.SourceFile, withoutLocation.LineNumber, withoutLocation.ColumnNumber = "", 0, 0
 	switch {
-	case single.CSP != (ContentSecurityPolicyReport{}):
+	case withoutLocation != (ContentSecurityPolicyReport{}):
 		stats.format, report = formatLegacy, receivedReport{CSP: single.CSP}
 	case single.Type == cspViolationReportType && !single.Body.isEmpty():
 		stats.format, report = formatReportingAPIObject, fromReportingAPI(single.ReportingAPIReport)
