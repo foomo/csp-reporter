@@ -40,7 +40,7 @@ Every `POST` body is classified by its JSON shape, not its `Content-Type`:
 | `POST` with a `Content-Encoding` other than `identity` (for example `gzip`) | `415`; the body is not read |
 | `POST` over `--rate-limit` or `--rate-limit-per-ip` (both off by default) | `429`; the body is not read |
 | `POST` that hits a bug in the service (a recovered panic) | `500` |
-| `POST` with a body over 64 KiB or of unknown length while `--max-concurrent-uploads` such requests are in progress | `503` with `Retry-After: 1`; the body is not read |
+| `POST` with a body over 64 KiB, declared or read so far, while `--max-concurrent-uploads` such requests are in progress | `503` with `Retry-After: 1`; a declared length is refused before the body is read, a body of unknown length after its first 64 KiB |
 | `OPTIONS` (CORS preflight) | `204` |
 | `GET` | `200` with a plain text greeting |
 | any other method | `405` |
@@ -54,7 +54,7 @@ Every `POST` body is classified by its JSON shape, not its `Content-Type`:
 
 ### Flags
 
-Every flag besides the two addresses and `--max-concurrent-uploads` is off by default, so a deployment that passes no flags has no rate limit, noise filter or keyed log limit, labels every report with site `other`, and answers `503` only to bodies over 64 KiB or of unknown length while 64 of them are in progress.
+Every flag besides the two addresses and `--max-concurrent-uploads` is off by default, so a deployment that passes no flags has no rate limit, noise filter or keyed log limit, labels every report with site `other`, and answers `503` only to bodies over 64 KiB while 64 of them are in progress.
 
 | Flag | Default | What it does |
 | --- | --- | --- |
@@ -67,7 +67,7 @@ Every flag besides the two addresses and `--max-concurrent-uploads` is off by de
 | `--drop-noise` | `false` | Drops reports blocking browser extensions, webview or placeholder schemes and localhost; see [Noise filter](#noise-filter) |
 | `--drop-blocked-hosts` | none | Comma-separated hosts whose blocked resources, subdomains included, are dropped; repeatable |
 | `--log-limit-per-key` | `0` (off) | Report log lines per second and key, instead of zap sampling; see [Logs](#logs) |
-| `--max-concurrent-uploads` | `64` | `POST` requests with a body over 64 KiB or of unknown length handled at once; `0` turns the bound off; see [Upload bound](#upload-bound) |
+| `--max-concurrent-uploads` | `64` | `POST` requests with a body over 64 KiB, declared or read so far, handled at once; `0` turns the bound off; see [Upload bound](#upload-bound) |
 
 A value the service cannot use (a negative or non-numeric rate or count, a malformed CIDR, host or site name, a host mapped to two sites, more than 20 site names) stops it at startup with exit status 2 and a message that names the flag.
 
@@ -94,10 +94,11 @@ The site is taken from the report, which any client can forge, so it says where 
 
 ### Upload bound
 
-A `POST` whose `Content-Length` is over 64 KiB, or that declares no length (chunked), takes one of `--max-concurrent-uploads` slots after the rate limit and `Content-Encoding` checks and before its body is read, and keeps it until it is answered. When no slot is free it gets `503` with `Retry-After: 1` and counts in `foomo_csr_requests_rejected_total{reason="overloaded"}`. A request that declares 64 KiB or less never takes a slot and is never answered `503`, because the server reads no more than the declared length, so such requests keep flowing while every slot is taken. To see how many of your requests are larger, compare `foomo_csr_request_body_bytes_bucket{le="65536"}` with `foomo_csr_request_body_bytes_count`.
+A `POST` whose body is over 64 KiB takes one of `--max-concurrent-uploads` slots, after the rate limit and `Content-Encoding` checks, and keeps it until it is answered. A `Content-Length` over 64 KiB takes the slot before the body is read; a body without a declared length (chunked) is read up to 64 KiB without a slot and takes one only when more follows. When no slot is free it gets `503` with `Retry-After: 1` and counts in `foomo_csr_requests_rejected_total{reason="overloaded"}`. A body of 64 KiB or less never takes a slot and is never answered `503`, whether it declares its length or not, because the server reads no more than a declared length, so such requests keep flowing while every slot is taken. To see how many of your requests are larger, compare `foomo_csr_request_body_bytes_bucket{le="65536"}` with `foomo_csr_request_body_bytes_count`.
 
-- The bound limits memory, not abuse. Each slot can hold a body of up to 1 MiB while it is read and decoded. With 64 concurrent worst-case 1 MiB uploads decoded at once (legacy reports with long strings, batches of 100 large reports, arrays of empty objects), the `linux/arm64` image's container memory (cgroup) peaked at 164 MiB after the first round and at 194 MiB over nine rounds, against 14 MiB idle, so about 2.8 MiB per slot; while the bodies were still arriving it held about 1.2 MiB per slot. Size a container memory limit from that, with headroom for garbage collection, or lower the bound.
-- A slot is held for the whole body read, up to the 30 s read limit, so slow or stalled large uploads use up slots without using much memory. Use `--rate-limit-per-ip` against a single sender.
+- The bound limits the memory of bodies over 64 KiB, not abuse. Each slot can hold a body of up to 1 MiB while it is read and decoded. With 64 concurrent worst-case 1 MiB uploads decoded at once (legacy reports with long strings, batches of 100 large reports, arrays of empty objects), the `linux/arm64` image's container memory (cgroup) peaked at 164 MiB after the first round and at 194 MiB over nine rounds, against 14 MiB idle, so about 2.8 MiB per slot; while the bodies were still arriving it held about 1.2 MiB per slot. Size a container memory limit from that, with headroom for garbage collection, or lower the bound.
+- Bodies of 64 KiB or less take no slot, so their memory grows with the number of open connections: each one holds what it has sent so far, up to 64 KiB plus read buffers, until it finishes or hits the 30 s read limit. The service does not limit connections; cap them at the ingress or proxy.
+- A slot is held for the rest of the body read, up to the 30 s read limit, so slow or stalled large uploads use up slots without using much memory. `--rate-limit-per-ip` limits request rate, not concurrency: a slot outlives the token its request used, so one client allowed `r` requests per second can hold about `32 × r` slots (a burst of `2 × r` plus 30 s of refill). It stops a single sender from taking every slot only when that is below `--max-concurrent-uploads`, and behind a proxy only with `--trusted-proxies`; otherwise cap concurrent connections per client at the ingress.
 - Browsers count a `503` as a failed delivery, and the service does not record the reports of a refused request.
 
 ### Noise filter
@@ -132,7 +133,7 @@ docker run --rm -p 8080:8080 -p 9200:9200 foomo/csp-reporter:latest /usr/bin/ser
 
 The same applies on Kubernetes: container `args` replace the image's `CMD`, so they must start with the binary path, for example `args: ["/usr/bin/service", "--site", "prod=shop.example.com", "--rate-limit", "1000"]`, or set `command: ["/usr/bin/service"]` and put only the flags in `args`.
 
-The Helm chart lives in [foomo/helm-charts](https://github.com/foomo/helm-charts/tree/main/charts/csp-reporter) and is published on [Artifact Hub](https://artifacthub.io/packages/helm/foomo/csp-reporter). Its container declares the report port 80 and the metrics port (`metrics.port`, default 9200). With `serviceMonitor.enabled` it also adds the metrics port to the Service and creates a Prometheus Operator ServiceMonitor; without it, set up scraping outside the chart (for example through its `podAnnotations` value, if your Prometheus discovers annotated pods).
+The Helm chart lives in [foomo/helm-charts](https://github.com/foomo/helm-charts/tree/main/charts/csp-reporter) and is published on [Artifact Hub](https://artifacthub.io/packages/helm/foomo/csp-reporter). Its container declares the report port and the metrics port (`metrics.port`, default 9200). With `serviceMonitor.enabled` it also adds the metrics port to the Service and creates a Prometheus Operator ServiceMonitor; without it, set up scraping outside the chart (for example through its `podAnnotations` value, if your Prometheus discovers annotated pods).
 
 Local development:
 
@@ -171,7 +172,7 @@ Every label value comes from a fixed set in code, never from the report, so the 
 - `disposition` is `enforce`, `report` or `unknown` as described in [What it accepts](#what-it-accepts). On a site whose policy names only `report-uri`, `unknown` is steady WebKit traffic rather than an anomaly.
 - `format` is `legacy` for `{"csp-report": ...}`, `reporting-api-array` for a Reporting API batch and `reporting-api-object` for a single Reporting API report.
 - `browser` comes from the user agent that is also logged, checked in this order: `edge` when it contains `Edg/`, `EdgA/`, `EdgiOS/` or `Edge/`; `firefox` for `Firefox/` or `FxiOS/`; `chrome` for `Chrome/`, `CriOS/` or `Chromium/`, which includes other Chromium-based browsers such as Opera; `safari` for `Safari/`; `other` for everything else.
-- `foomo_csr_site_violations_total` counts every recorded report once, like `foomo_csr_violated_directive_total`, which stays unchanged; `site` follows the [Sites](#sites) rules.
+- `foomo_csr_site_violations_total` counts every recorded report once, like `foomo_csr_violated_directive_total`; `site` follows the [Sites](#sites) rules.
 - `foomo_csr_reports_received_total` counts reports before the per-request cap and the noise filter, so recorded reports are received minus `batch_cap` and `noise_*` drops. `foomo_csr_reports_per_request` observes the same count once per accepted `POST`, including `0` for a request that carried no CSP report.
 - `foomo_csr_panics_recovered_total` counts requests that hit a bug and were answered with `500`.
 - All series except `foomo_csr_violated_directive_total` exist with value 0 from startup; that one appears with the first report for each directive and disposition. `foomo_csr_site_violations_total` starts with every directive (and `unknown`) and disposition for each configured site and `other`; the `noise_*` reasons exist only when `--drop-noise` or `--drop-blocked-hosts` is set.
@@ -205,7 +206,7 @@ Because every report line has the same message, sampling lets one noisy violatio
 | `CSPReporterDown` | `page` | No `foomo_csr_http_requests_in_flight` series with `job="csp-reporter"` for 5 minutes; use the job label your scrape configuration gives the reporter |
 | `CSPEnforcedViolationSpike` | `ticket` | For 10 minutes, a site's enforced violations over the last 30 minutes are above 0.1 per second and three times the same 30 minutes a day earlier; a site without a series a day earlier, such as a new one, is judged by the floor alone |
 | `CSPSiteSilent` | `ticket` | Site `prod` recorded no report for 6 hours |
-| `CSPUnknownDirective` | `ticket` | A site recorded a report with `directive="unknown"` in the last hour |
+| `CSPUnknownDirective` | `ticket` | A site recorded more than 5 reports with `directive="unknown"` in the last hour, for 30 minutes |
 | `CSPReporterRateLimited`, `CSPReporterOverloaded`, `CSPReporterBatchCap`, `CSPReporterPanics` | `ticket` | Any `429` (`rate_limited`), `503` (`overloaded`), report dropped beyond the per-request cap (`batch_cap`) or recovered panic in the last 10 minutes |
 
 - The spike and unknown-directive rules read `foomo_csr_site_violations_total`, which exists with value 0 from startup, so the first report after a restart counts.
