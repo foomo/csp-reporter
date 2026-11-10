@@ -12,13 +12,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// These are Playwright builds captured over http://localhost; they do not stand in for Safari or stock Firefox.
+// These are Playwright-driven builds captured against localhost; they do not stand in for Safari or stock Firefox.
 func TestBrowserFixtures(t *testing.T) {
 	tests := []struct {
 		file, contentType, format, disposition string
 		directives                             map[string]float64
 	}{
-		// No Chromium Reporting API (report-to) payload could be captured over plain http://localhost.
+		// Chromium delivers Reporting API reports only to an HTTPS endpoint, and batches the report-only page's violations.
+		{"playwright-chrome-157.0.8103.39-report-to-enforce-1.json", "application/reports+json", formatReportingAPIArray, "enforce", map[string]float64{"script-src-elem": 1}},
+		{"playwright-chrome-157.0.8103.39-report-to-report-only-1.json", "application/reports+json", formatReportingAPIArray, "report", map[string]float64{"script-src-elem": 1, "img-src": 2}},
+		{"playwright-chromium-156.0.8078.4-report-to-enforce-1.json", "application/reports+json", formatReportingAPIArray, "enforce", map[string]float64{"script-src-elem": 1}},
+		{"playwright-chromium-156.0.8078.4-report-to-report-only-1.json", "application/reports+json", formatReportingAPIArray, "report", map[string]float64{"script-src-elem": 1, "img-src": 2}},
 		{"playwright-chrome-157.0.8103.39-report-uri-enforce-1.json", "application/csp-report", formatLegacy, "enforce", map[string]float64{"script-src-elem": 1}},
 		{"playwright-chrome-157.0.8103.39-report-uri-report-only-1.json", "application/csp-report", formatLegacy, "report", map[string]float64{"script-src-elem": 1}},
 		{"playwright-chromium-156.0.8078.4-report-uri-enforce-1.json", "application/csp-report", formatLegacy, "enforce", map[string]float64{"script-src-elem": 1}},
