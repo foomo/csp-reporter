@@ -76,7 +76,7 @@ A value the service cannot use (a negative or non-numeric rate, a malformed CIDR
 - A plain host such as `shop.example.com` matches only that host.
 - A pattern starting with `*.` matches every subdomain at any depth, on a label boundary, but not the host itself: `*.stage.shop.example.com` matches `www.node-a.stage.shop.example.com` and does not match `stage.shop.example.com`, `xstage.shop.example.com` or `a.stage.shop.example.com.evil.example`. `*` is allowed only as the whole leading label.
 - Matching ignores case, the port and a trailing dot. Only the host counts: a configured host in the userinfo or path, as in `https://shop.example.com@evil.example/` or `https://evil.example/shop.example.com`, does not match.
-- An exact host beats a wildcard, and among wildcards the longest wins, so with `--site prod=*.shop.example.com --site stage=*.stage.shop.example.com` the host `www.stage.shop.example.com` is `stage`.
+- An exact host beats a wildcard, and among wildcards the longest wins, so with `--site 'prod=*.shop.example.com' --site 'stage=*.stage.shop.example.com'` the host `www.stage.shop.example.com` is `stage`.
 - A `document-uri` that matches no pattern, is empty, relative or not a parsable absolute URL is `other`. Without `--site` every report is `other`.
 - Names match `[a-z0-9_-]{1,32}`, `other` is reserved, at most 20 names are allowed and a pattern may belong to one name only. Repeating a name adds hosts to it.
 
