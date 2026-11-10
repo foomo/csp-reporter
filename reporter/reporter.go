@@ -211,7 +211,7 @@ func isKnownDirective(directive string) bool {
 // maxBodyBytes caps one request; a Reporting API batch of CSP reports stays far below it.
 const maxBodyBytes = 1 << 20
 
-// maxUnslottedBodyBytes is the largest declared body that takes no upload slot; browser reports and batches stay below it.
+// maxUnslottedBodyBytes is the largest declared body that takes no upload slot, so single reports never wait for one.
 const maxUnslottedBodyBytes = 64 << 10
 
 // maxReportsPerRequest caps the reports recorded from one batch, so one request cannot flood the

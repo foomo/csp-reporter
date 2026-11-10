@@ -23,8 +23,7 @@ type options struct {
 	maxUploads     int
 }
 
-// WithMaxConcurrentUploads answers a POST whose body is over 64 KiB or of unknown length with 503 while n such
-// requests are being read or handled; smaller bodies are never limited. 0 turns it off.
+// WithMaxConcurrentUploads answers a POST with a body over 64 KiB or of unknown length with 503 while n such requests are in progress; 0 turns it off.
 func WithMaxConcurrentUploads(n int) Option {
 	return func(o *options) { o.maxUploads = n }
 }

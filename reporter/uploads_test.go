@@ -20,8 +20,7 @@ import (
 // largeReport is a valid report whose padding puts it over the size that takes no upload slot.
 var largeReport = rateTestReport + strings.Repeat(" ", maxUnslottedBodyBytes)
 
-// holdSlot starts a POST of unknown length and returns once the handler reads its body, so its slot is taken.
-// The returned func sends the rest of the body and returns the status code.
+// holdSlot starts a POST of unknown length that holds a slot until the returned func finishes it and returns its status.
 func holdSlot(t *testing.T, handler http.HandlerFunc) (finish func() int) {
 	t.Helper()
 	pr, pw := io.Pipe()
