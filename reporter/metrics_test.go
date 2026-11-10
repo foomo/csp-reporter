@@ -3,6 +3,7 @@ package reporter
 import (
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -54,21 +55,42 @@ var httpSeries = [][2]string{
 	{"OPTIONS", "204"}, {"POST", "204"}, {"POST", "400"}, {"POST", "413"}, {"GET", "200"}, {"other", "405"},
 }
 
+// startupFamilies is gathered before any test runs, so it shows only what the package itself creates.
+var startupFamilies []*dto.MetricFamily
+
+func TestMain(m *testing.M) {
+	var err error
+	if startupFamilies, err = prometheus.DefaultGatherer.Gather(); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
 func TestMetricsPreinitialised(t *testing.T) {
-	// Counts equal to the enumerations: every value exists and nothing else leaks into a label.
-	for name, tt := range map[string]struct {
-		c    prometheus.Collector
-		want int
-	}{
-		"http_requests_total":     {httpRequestsCount, len(httpSeries)},
-		"reports_received_total":  {reportsReceivedCount, 2},
-		"reports_dropped_total":   {reportsDroppedCount, 3},
-		"requests_rejected_total": {requestsRejectedCount, 4},
-		"blocked_kind_total":      {blockedKindCount, len(blockedKinds) * 2},
-	} {
-		if got := testutil.CollectAndCount(tt.c); got != tt.want {
-			t.Errorf("%s has %d series, want %d", name, got, tt.want)
+	want := map[string]int{
+		"foomo_csr_http_requests_total":     len(httpSeries),
+		"foomo_csr_reports_received_total":  2,
+		"foomo_csr_reports_dropped_total":   3,
+		"foomo_csr_requests_rejected_total": 4,
+		"foomo_csr_blocked_kind_total":      len(blockedKinds) * 2,
+	}
+	for _, mf := range startupFamilies {
+		n, ok := want[mf.GetName()]
+		if !ok {
+			continue
 		}
+		delete(want, mf.GetName())
+		if len(mf.GetMetric()) != n {
+			t.Errorf("%s has %d series at startup, want %d", mf.GetName(), len(mf.GetMetric()), n)
+		}
+		for _, m := range mf.GetMetric() {
+			if v := m.GetCounter().GetValue(); v != 0 {
+				t.Errorf("%s%v = %v at startup, want 0", mf.GetName(), m.GetLabel(), v)
+			}
+		}
+	}
+	for name := range want {
+		t.Errorf("%s has no series at startup", name)
 	}
 }
 
