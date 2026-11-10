@@ -172,6 +172,9 @@ type receivedReport struct {
 // errUnknownReport is returned for JSON that is neither a legacy nor a Reporting API CSP report.
 var errUnknownReport = errors.New("body is not a CSP report")
 
+// errMalformedJSON is returned for a body that is not one valid JSON document.
+var errMalformedJSON = errors.New("body is not valid JSON")
+
 // errBodyTooLarge is returned for a body over maxBodyBytes.
 var errBodyTooLarge = errors.New("request body too large")
 
@@ -204,15 +207,33 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 		return nil, stats, err
 	}
 	trimmed := bytes.TrimLeft(data, " \t\r\n")
-	if len(trimmed) > 0 && trimmed[0] == '[' {
-		var batch []ReportingAPIReport
-		if err := unmarshalLenient(trimmed, &batch); err != nil {
+	if !json.Valid(trimmed) {
+		return nil, stats, errMalformedJSON
+	}
+	if trimmed[0] == '[' {
+		stats.format = formatReportingAPI
+		// One entry at a time, so a huge batch costs no more memory than its largest entry.
+		dec := json.NewDecoder(bytes.NewReader(trimmed))
+		if _, err := dec.Token(); err != nil {
 			return nil, stats, err
 		}
-		stats.format = formatReportingAPI
 		var reports []receivedReport
-		typed := false
-		for _, entry := range batch {
+		var raw json.RawMessage
+		var entry ReportingAPIReport
+		entries, typed := 0, false
+		for dec.More() {
+			if err := dec.Decode(&raw); err != nil {
+				return nil, stats, err
+			}
+			entries++
+			// Reused rather than declared per entry, which would allocate once per entry.
+			entry = ReportingAPIReport{}
+			// Any other JSON value counts as an untyped entry, as decoding it into a struct would.
+			if raw[0] == '{' {
+				if err := unmarshalLenient(raw, &entry); err != nil {
+					return nil, stats, err
+				}
+			}
 			typed = typed || entry.Type != ""
 			switch {
 			case entry.Type != cspViolationReportType:
@@ -227,7 +248,7 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 				stats.batchCap++
 			}
 		}
-		if len(batch) > 0 && !typed {
+		if entries > 0 && !typed {
 			// Same answer as for a single unknown object.
 			return nil, stats, errUnknownReport
 		}
