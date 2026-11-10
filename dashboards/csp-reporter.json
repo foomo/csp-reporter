@@ -54,12 +54,14 @@
         },
         "overrides": []
       },
-      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rate(foomo_csr_requests_rejected_total[$__rate_interval])) / (sum(rate(foomo_csr_http_requests_total[$__rate_interval])) > 0)"
+          "expr": "sum(rate(foomo_csr_requests_rejected_total[$__rate_interval])) / (sum(rate(foomo_csr_http_requests_total[$__rate_interval])) > 0)",
+          "instant": true,
+          "range": false
         }
       ]
     },
@@ -254,19 +256,19 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(foomo_csr_http_request_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(foomo_csr_http_request_duration_seconds_bucket[$__rate_interval]))) > 0",
           "legendFormat": "p50"
         },
         {
           "refId": "B",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(foomo_csr_http_request_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(foomo_csr_http_request_duration_seconds_bucket[$__rate_interval]))) > 0",
           "legendFormat": "p95"
         },
         {
           "refId": "C",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(foomo_csr_http_request_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(foomo_csr_http_request_duration_seconds_bucket[$__rate_interval]))) > 0",
           "legendFormat": "p99"
         }
       ]
@@ -283,7 +285,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(foomo_csr_request_body_bytes_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(foomo_csr_request_body_bytes_bucket[$__rate_interval]))) > 0",
           "legendFormat": "p95"
         }
       ]
