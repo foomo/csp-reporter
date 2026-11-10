@@ -41,7 +41,7 @@ Every `POST` body is classified by its JSON shape, not its `Content-Type`:
 | any other method | `405` |
 
 - A request records at most 100 reports; further CSP reports in the same batch are dropped and counted in `foomo_csr_reports_dropped_total{reason="batch_cap"}`.
-- `OPTIONS` and `POST` responses allow any origin: they echo the request's `Origin` (or `*` without one) in `Access-Control-Allow-Origin`, allow `POST, OPTIONS` and the `Content-Type` header, and preflight answers are cacheable for 86400 seconds.
+- `OPTIONS` and `POST` responses allow any origin: they echo the request's `Origin` (or `*` without one) in `Access-Control-Allow-Origin`, allow `POST, OPTIONS` and the `Content-Type` header; preflight answers also send `Access-Control-Max-Age: 86400`.
 - Only the disposition `report` counts as report-only; anything else counts as `enforce`.
 
 ## Running it
@@ -51,7 +51,7 @@ Every `POST` body is classified by its JSON shape, not its `Content-Type`:
 | `--address` | `:80` | CSP reports |
 | `--prometheus-address` | `:9200` | Prometheus metrics at `/metrics` |
 
-The Docker image `foomo/csp-reporter` runs the service with the defaults and exposes ports 80 and 9200:
+The Docker image `foomo/csp-reporter` runs the service with the defaults and exposes ports 80 and 9200 (the host ports below are examples):
 
 ```sh
 docker run --rm -p 8080:80 -p 9200:9200 foomo/csp-reporter:latest
@@ -80,7 +80,7 @@ Every label value comes from a fixed set in code, never from the report, so the 
 
 | Metric | Type | Labels and allowed values |
 | --- | --- | --- |
-| `foomo_csr_violated_directive_total` | counter | `directive`: a directive from [`reporter/constants.go`](reporter/constants.go) or `unknown`; `disposition`: `enforce`, `report` |
+| `foomo_csr_violated_directive_total` | counter | `directive`: one of the directives listed below, or `unknown`; `disposition`: `enforce`, `report` |
 | `foomo_csr_blocked_kind_total` | counter | `kind`: `inline`, `eval`, `wasm_eval`, `data`, `blob`, `extension`, `https`, `http`, `other_scheme`, `empty`; `disposition`: `enforce`, `report` |
 | `foomo_csr_reports_received_total` | counter | `format`: `legacy`, `reporting-api` |
 | `foomo_csr_reports_dropped_total` | counter | `reason`: `non_csp_type`, `empty_body`, `batch_cap` |
@@ -90,6 +90,7 @@ Every label value comes from a fixed set in code, never from the report, so the 
 | `foomo_csr_request_body_bytes` | histogram | none; an oversized body counts as 1048576 bytes |
 | `foomo_csr_last_report_timestamp_seconds` | gauge | none |
 
+- `directive` is the first word of the report's violated directive (the effective directive for Reporting API reports) when it is one of `child-src`, `connect-src`, `default-src`, `font-src`, `frame-src`, `img-src`, `manifest-src`, `media-src`, `object-src`, `prefetch-src`, `script-src`, `script-src-elem`, `script-src-attr`, `style-src`, `style-src-elem`, `style-src-attr`, `worker-src`, `base-uri`, `form-action`, `frame-ancestors` ([`reporter/constants.go`](reporter/constants.go)); anything else is `unknown`.
 - `foomo_csr_reports_received_total` counts reports before the per-request cap, so recorded reports are received minus `batch_cap` drops.
 - All series except `foomo_csr_violated_directive_total` exist with value 0 from startup; that one appears with the first report for each directive and disposition.
 - The Go runtime and process collectors (`go_*`, `process_*`) are exported as well.
@@ -115,7 +116,7 @@ The example server in `example/server` is a separate Go module.
 
 CI:
 
-- [`test.yml`](.github/workflows/test.yml) builds, vets and runs the race-enabled tests and builds the example server, on pushes to `main` and on pull requests; its job is named `test`.
+- [`test.yml`](.github/workflows/test.yml) builds, vets and runs the race-enabled tests and builds the example server, on pushes to `main` and on pull requests. Its job `test` is the status check that pull requests to `main` must pass.
 - [`docker.yml`](.github/workflows/docker.yml) builds the image for `linux/amd64` and `linux/arm64` on pull requests, and also pushes it to Docker Hub on pushes to `main` and on published releases.
 
 ## Releasing
