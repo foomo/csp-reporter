@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -235,7 +237,8 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 		if errors.As(err, &maxBytesErr) {
 			return nil, stats, errBodyTooLarge
 		}
-		return nil, stats, fmt.Errorf("%w: %w", errReadBody, err)
+		// Only a fixed cause: the network error's text names the peer's address, which is never logged.
+		return nil, stats, fmt.Errorf("%w: %s", errReadBody, readErrorCause(err))
 	}
 	trimmed := bytes.TrimLeft(data, " \t\r\n")
 	if !json.Valid(trimmed) {
@@ -308,6 +311,18 @@ func decodeReports(body io.Reader) ([]receivedReport, decodeStats, error) {
 		return nil, stats, nil
 	default:
 		return nil, stats, errUnknownReport
+	}
+}
+
+// readErrorCause classifies a body read error as timeout, reset or other.
+func readErrorCause(err error) string {
+	switch {
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, syscall.ECONNRESET):
+		return "reset"
+	default:
+		return "other"
 	}
 }
 

@@ -1,12 +1,15 @@
 package reporter
 
 import (
-	"errors"
+	"fmt"
+	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -464,13 +467,44 @@ func TestBrowserFamily(t *testing.T) {
 // A body that breaks off, for example on a timeout or disconnect, is not malformed JSON.
 func TestHandlerReadError(t *testing.T) {
 	before := takeSnapshot(t)
-	req := httptest.NewRequest(http.MethodPost, "/", iotest.ErrReader(errors.New("connection reset")))
+	readErr := &net.OpError{
+		Op: "read", Net: "tcp",
+		Source: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 61754},
+		Addr:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 61756},
+		Err:    os.ErrDeadlineExceeded,
+	}
+	core, logs := observer.New(zap.InfoLevel)
+	req := httptest.NewRequest(http.MethodPost, "/", iotest.ErrReader(readErr))
 	rec := httptest.NewRecorder()
-	NewHandler(zap.NewNop())(rec, req)
+	NewHandler(zap.New(core))(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 	checkDelta(t, takeSnapshot(t).delta(before), snapshot{
 		"http/POST/400": 1, "rejected/read_error": 1, "durations": 1, "bodies": 1,
 	})
+	if logs.Len() != 1 {
+		t.Fatalf("got %d log entries, want 1", logs.Len())
+	}
+	entry := logs.All()[0]
+	line := fmt.Sprint(entry.Message, entry.ContextMap())
+	if strings.Contains(line, "127.0.0.1") || !strings.Contains(line, "timeout") {
+		t.Errorf("log line %q must name the timeout and no peer address", line)
+	}
+}
+
+func TestReadErrorCause(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{&net.OpError{Op: "read", Err: os.ErrDeadlineExceeded}, "timeout"},
+		{&net.OpError{Op: "read", Err: os.NewSyscallError("read", syscall.ECONNRESET)}, "reset"},
+		{io.ErrUnexpectedEOF, "other"},
+	}
+	for _, tt := range tests {
+		if got := readErrorCause(tt.err); got != tt.want {
+			t.Errorf("readErrorCause(%v) = %q, want %q", tt.err, got, tt.want)
+		}
+	}
 }
