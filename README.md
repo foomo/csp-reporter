@@ -116,7 +116,7 @@ The example server in `example/server` is a separate Go module.
 
 CI:
 
-- [`test.yml`](.github/workflows/test.yml) builds, vets and runs the race-enabled tests and builds the example server, on pushes to `main`, on pull requests and on manual runs. Its job id `test` is the status check name; renaming the job renames the check.
+- [`test.yml`](.github/workflows/test.yml) builds, vets and runs the race-enabled tests and builds the example server, on pushes to `main`, on pull requests and on manual runs. Its job id `test` is the status check the `main` ruleset requires; renaming the job renames the check.
 - [`docker.yml`](.github/workflows/docker.yml) builds the image for `linux/amd64` and `linux/arm64` on pull requests, and also pushes it to Docker Hub on pushes to `main` and on published releases.
 
 ## Releasing

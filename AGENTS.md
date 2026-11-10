@@ -38,5 +38,5 @@ Go is pinned to 1.27.3 in both `go.mod` files and in both Dockerfiles; CI reads 
 - Response codes matter to browsers: the Reporting API counts any non-2xx answer as a delivery failure and a `410` removes the endpoint, so skipped or harmless input is answered with `204`.
 - Logging is sampled (`cmd/reporter/main.go`); never derive counts from logs.
 - The Helm chart in `foomo/helm-charts` runs the image with no command or args and probes container port 80, so changing the default `--address` or the image `CMD` breaks it.
-- The job id `test` in `test.yml` is the status check name; renaming the job renames the check. CI and the release flow are described in the README.
+- The job id `test` in `test.yml` is the status check the `main` ruleset requires; renaming the job renames the check. CI and the release flow are described in the README.
 - Actions in workflows are pinned by commit SHA with a version comment; keep that when updating them.
