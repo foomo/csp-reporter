@@ -72,6 +72,10 @@ func (p *hostPatterns) add(pattern, value string) error {
 
 // match prefers an exact host, then the longest wildcard: the first dot gives the longest suffix.
 func (p *hostPatterns) match(host string) (string, bool) {
+	// No pattern is longer than a DNS name, and the suffix loop is quadratic in the host length.
+	if len(host) > 253 {
+		return "", false
+	}
 	if v, ok := p.exact[host]; ok {
 		return v, true
 	}
@@ -168,10 +172,15 @@ func (f *noiseFilter) reason(csp ContentSecurityPolicyReport) string {
 		return ""
 	}
 	blocked := csp.BlockedUri
-	if f.dropNoise {
-		if blockedKind(blocked) == "extension" {
+	switch blockedKind(blocked) {
+	case "inline", "eval", "wasm_eval", "data", "blob":
+		return ""
+	case "extension":
+		if f.dropNoise {
 			return dropNoiseExtension
 		}
+	}
+	if f.dropNoise {
 		scheme, _, _ := strings.Cut(blocked, ":")
 		if _, ok := noiseSchemes[strings.ToLower(scheme)]; ok {
 			return dropNoiseScheme

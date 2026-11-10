@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -211,6 +212,24 @@ func TestHostsSet(t *testing.T) {
 	}
 }
 
+// A long host of many labels must not cost quadratic time once the wildcard map is large enough to hash its keys.
+func TestLongHostMatchesNothingQuickly(t *testing.T) {
+	var hosts Hosts
+	for i := 0; i < 9; i++ {
+		if err := hosts.Set(fmt.Sprintf("ads%d.example.net", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	host := strings.Repeat("a.", 400000) + "ads0.example.net"
+	start := time.Now()
+	if _, ok := hosts.patterns.match(host); ok {
+		t.Error("a host longer than a DNS name matched")
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Errorf("match took %v", elapsed)
+	}
+}
+
 func TestNoiseReason(t *testing.T) {
 	var hosts Hosts
 	if err := hosts.Set("ads.example.net"); err != nil {
@@ -242,6 +261,9 @@ func TestNoiseReason(t *testing.T) {
 		{"data:image/png;base64,AAAA", both, ""},
 		{"blob", both, ""},
 		{"blob:https://ads.example.net/1", both, ""},
+		{"blob://localhost/x", both, ""},
+		{"data://ads.example.net/x", both, ""},
+		{"DATA://localhost/x", both, ""},
 		{"", both, ""},
 		{"https://cdn.example.com/x.js", both, ""},
 		{"https://xads.example.net/x.js", both, ""},
