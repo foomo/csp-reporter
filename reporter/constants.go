@@ -24,4 +24,38 @@ var (
 		"form-action":     {},
 		"frame-ancestors": {},
 	}
+
+	// noiseSchemes are webview bridges and placeholders that browsers and in-app browsers report, not page resources.
+	noiseSchemes = map[string]struct{}{
+		"about":                        {},
+		"android-webview":              {},
+		"android-webview-video-poster": {},
+		"bdvideo":                      {},
+		"chromeinvoke":                 {},
+		"chromeinvokeimmediate":        {},
+		"chromenull":                   {},
+		"jar":                          {},
+		"mbinit":                       {},
+		"ms-appx":                      {},
+		"ms-appx-web":                  {},
+		"mx":                           {},
+		"mxaddon-pkg":                  {},
+		"mxjscall":                     {},
+		"nativebaiduhd":                {},
+		"none":                         {},
+		"opera":                        {},
+		"res":                          {},
+		"resource":                     {},
+		"safari-resource":              {},
+		"symres":                       {},
+		"tmtbff":                       {},
+		"webviewprogressproxy":         {},
+		"wvjbscheme":                   {},
+	}
+
+	loopbackHosts = map[string]struct{}{
+		"localhost": {},
+		"127.0.0.1": {},
+		"::1":       {},
+	}
 )

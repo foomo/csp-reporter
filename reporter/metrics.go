@@ -22,6 +22,12 @@ const (
 	dropEmptyBody  = "empty_body"
 	dropBatchCap   = "batch_cap"
 
+	dropNoiseExtension      = "noise_extension"
+	dropNoiseScheme         = "noise_scheme"
+	dropNoiseLocalhost      = "noise_localhost"
+	dropNoiseOperatorDomain = "noise_operator_domain"
+
+	rejectRateLimited         = "rate_limited"
 	rejectBodyTooLarge        = "body_too_large"
 	rejectMalformedJSON       = "malformed_json"
 	rejectUnknownShape        = "unknown_shape"
@@ -119,13 +125,30 @@ var (
 		Name:      "panics_recovered_total",
 		Help:      "Counts panics in the report handler that were recovered and answered with 500",
 	})
+	siteViolationsCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: metricsSubsystem,
+		Name:      "site_violations_total",
+		Help:      "Counts recorded reports by the configured site of their document host, directive and disposition",
+	}, []string{"site", "directive", "disposition"})
+	logLinesSuppressedCount = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: metricsSubsystem,
+		Name:      "log_lines_suppressed_total",
+		Help:      "Counts recorded reports whose log line the keyed log limit suppressed",
+	})
 )
 
 // httpSeries are the method and code pairs the handler can produce.
 var httpSeries = [][2]string{
 	{http.MethodOptions, "204"}, {http.MethodPost, "204"}, {http.MethodPost, "400"}, {http.MethodPost, "413"},
-	{http.MethodPost, "415"}, {http.MethodPost, "500"}, {http.MethodGet, "200"}, {methodOther, "405"},
+	{http.MethodPost, "415"}, {http.MethodPost, "429"}, {http.MethodPost, "500"}, {http.MethodGet, "200"},
+	{methodOther, "405"},
 }
+
+var noiseReasons = []string{dropNoiseExtension, dropNoiseScheme, dropNoiseLocalhost, dropNoiseOperatorDomain}
+
+var dispositions = []string{"enforce", "report"}
 
 var reportFormats = []string{formatLegacy, formatReportingAPIArray, formatReportingAPIObject}
 
@@ -133,7 +156,7 @@ var browsers = []string{"chrome", "firefox", "safari", "edge", "other"}
 
 var rejectReasons = []string{
 	rejectBodyTooLarge, rejectMalformedJSON, rejectUnknownShape, rejectMethodNotAllowed, rejectReadError,
-	rejectUnsupportedEncoding,
+	rejectUnsupportedEncoding, rejectRateLimited,
 }
 
 var blockedKinds = []string{
@@ -169,13 +192,38 @@ func init() {
 	}
 }
 
+// initSiteSeries pre-creates site_violations_total for the configured site names and "other".
+func initSiteSeries(sites *Sites) {
+	names := []string{siteOther}
+	if sites != nil {
+		names = append(names, sites.names...)
+	}
+	for _, site := range names {
+		for _, disposition := range dispositions {
+			siteViolationsCount.WithLabelValues(site, unknownDirective, disposition)
+			for directive := range cspDirectives {
+				siteViolationsCount.WithLabelValues(site, directive, disposition)
+			}
+		}
+	}
+}
+
 // decodeStats is what decodeReports saw in one body, for metrics.
 type decodeStats struct {
 	bodyBytes int
 	format    string
-	// received counts recognised CSP reports, including those beyond the per-request cap.
+	// received counts recognised CSP reports, including those beyond the per-request cap and noise.
 	received                        int
 	nonCSPType, emptyBody, batchCap int
+	// noise counts dropped noise reports by reason.
+	noise map[string]int
+}
+
+func (s *decodeStats) dropNoise(reason string) {
+	if s.noise == nil {
+		s.noise = map[string]int{}
+	}
+	s.noise[reason]++
 }
 
 func (s decodeStats) record() {
@@ -185,6 +233,9 @@ func (s decodeStats) record() {
 	reportsDroppedCount.WithLabelValues(dropNonCSPType).Add(float64(s.nonCSPType))
 	reportsDroppedCount.WithLabelValues(dropEmptyBody).Add(float64(s.emptyBody))
 	reportsDroppedCount.WithLabelValues(dropBatchCap).Add(float64(s.batchCap))
+	for reason, n := range s.noise {
+		reportsDroppedCount.WithLabelValues(reason).Add(float64(n))
+	}
 	reportsPerRequest.Observe(float64(s.received))
 }
 

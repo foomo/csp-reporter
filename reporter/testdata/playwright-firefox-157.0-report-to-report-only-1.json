@@ -1,0 +1,62 @@
+[
+ {
+  "age": 11,
+  "type": "csp-violation",
+  "url": "http://localhost:58099/p2-report-only-both",
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0",
+  "body": {
+ "documentURL": "http://localhost:58099/p2-report-only-both",
+ "blockedURL": "inline",
+ "referrer": null,
+ "effectiveDirective": "script-src-elem",
+ "originalPolicy": "default-src 'none'; script-src 'self' 'report-sample'; img-src 'none'; report-uri http://localhost:58099/report-uri; report-to csp-endpoint",
+ "sourceFile": "http://localhost:58099/p2-report-only-both",
+ "sample": "window.x=1",
+ "disposition": "report",
+ "statusCode": 200,
+ "lineNumber": 1,
+ "columnNumber": 65
+}
+
+ },
+ {
+  "age": 11,
+  "type": "csp-violation",
+  "url": "http://localhost:58099/p2-report-only-both",
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0",
+  "body": {
+ "documentURL": "http://localhost:58099/p2-report-only-both",
+ "blockedURL": "http://localhost:58099/blocked.png",
+ "referrer": null,
+ "effectiveDirective": "img-src",
+ "originalPolicy": "default-src 'none'; script-src 'self' 'report-sample'; img-src 'none'; report-uri http://localhost:58099/report-uri; report-to csp-endpoint",
+ "sourceFile": null,
+ "sample": null,
+ "disposition": "report",
+ "statusCode": 200,
+ "lineNumber": null,
+ "columnNumber": null
+}
+
+ },
+ {
+  "age": 11,
+  "type": "csp-violation",
+  "url": "http://localhost:58099/p2-report-only-both",
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0",
+  "body": {
+ "documentURL": "http://localhost:58099/p2-report-only-both",
+ "blockedURL": "http://localhost:58099/favicon.ico",
+ "referrer": null,
+ "effectiveDirective": "img-src",
+ "originalPolicy": "default-src 'none'; script-src 'self' 'report-sample'; img-src 'none'; report-uri http://localhost:58099/report-uri; report-to csp-endpoint",
+ "sourceFile": "resource",
+ "sample": null,
+ "disposition": "report",
+ "statusCode": 200,
+ "lineNumber": 232,
+ "columnNumber": 20
+}
+
+ }
+]
