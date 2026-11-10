@@ -180,8 +180,8 @@ func unmarshalLenient(data []byte, v interface{}) error {
 func decodeReports(body io.Reader) ([]receivedReport, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
-		// http.MaxBytesReader; the typed *http.MaxBytesError needs go 1.19, go.mod is on 1.17.
-		if err.Error() == "http: request body too large" {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
 			return nil, errBodyTooLarge
 		}
 		return nil, err

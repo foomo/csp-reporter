@@ -1,3 +1,9 @@
-docker/
-helm/
+.git
+.github
+.idea
 example/
+dist/
+dashboards/
+research_notes/
+reports/
+*.md

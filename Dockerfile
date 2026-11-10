@@ -1,19 +1,21 @@
-FROM golang as base
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS builder
 
 WORKDIR /go/csp-reporter
 
-COPY ./go.mod ./go.sum ./
-
-RUN  go mod download -x
+COPY go.mod go.sum ./
+RUN go mod download
 
 COPY . .
 
-FROM base as builder
+ARG TARGETOS
+ARG TARGETARCH
 
-RUN GOARCH=amd64 GOOS=linux CGO_ENABLED=0 go build -o /service ./cmd/reporter/main.go
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w" -o /service ./cmd/reporter
 
-FROM alpine
+FROM alpine:3.24.4
 
 COPY --from=builder /service /usr/bin/service
 
-CMD "/usr/bin/service"
+EXPOSE 80 9200
+
+CMD ["/usr/bin/service"]
