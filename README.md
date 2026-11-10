@@ -224,6 +224,7 @@ The example server in `example/server` is a separate Go module.
 CI:
 
 - [`test.yml`](.github/workflows/test.yml) builds, vets and runs the race-enabled tests, builds the example server and checks and tests the example alert rules with `promtool` from the `prom/prometheus` image, on pushes to `main`, on pull requests and on manual runs. Its job id `test` is the status check the `main` ruleset requires; renaming the job renames the check.
+- [Dependabot](.github/dependabot.yml) opens grouped pull requests every Sunday for Go modules, Docker base images and GitHub Actions, for versions at least 7 days old; Docker major versions are left out.
 - [`docker.yml`](.github/workflows/docker.yml) builds the image for `linux/amd64` and `linux/arm64` on pull requests, and also pushes it to Docker Hub on pushes to `main` and on published releases.
 
 ## Releasing
