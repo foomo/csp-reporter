@@ -92,6 +92,10 @@ func parseFlags(args []string, output io.Writer, reportLog *zap.Logger) (setting
 				}
 				prefix = netip.PrefixFrom(addr, addr.BitLen())
 			}
+			if prefix.Addr().Is4In6() {
+				// Peers are unmapped before the check, so a mapped prefix would never match.
+				return fmt.Errorf("%q is an IPv4-mapped IPv6 address; give the IPv4 form", entry)
+			}
 			trustedProxies = append(trustedProxies, prefix.Masked())
 		}
 		return nil

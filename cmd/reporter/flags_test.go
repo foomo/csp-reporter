@@ -48,6 +48,8 @@ func TestParseFlagsRejects(t *testing.T) {
 		{[]string{"--trusted-proxies=10.0.0.0/33"}, "-trusted-proxies"},
 		{[]string{"--trusted-proxies=10.0.0.0/8,proxy.example.com"}, "-trusted-proxies"},
 		{[]string{"--trusted-proxies="}, "-trusted-proxies"},
+		{[]string{"--trusted-proxies=::ffff:10.0.0.0/104"}, "-trusted-proxies"},
+		{[]string{"--trusted-proxies=::ffff:10.0.0.1"}, "-trusted-proxies"},
 		{[]string{"--drop-blocked-hosts=ads.example.net,*.tracker.example.org"}, "-drop-blocked-hosts"},
 		{[]string{"--drop-blocked-hosts="}, "-drop-blocked-hosts"},
 		{[]string{"--site=shop.example.com"}, "-site"},
@@ -130,7 +132,7 @@ type fixedClock time.Time
 func (c fixedClock) Now() time.Time                         { return time.Time(c) }
 func (c fixedClock) NewTicker(d time.Duration) *time.Ticker { return time.NewTicker(d) }
 
-// With the flag a new key gets its line after 100+ lines of another key in one second; without it zap sampling drops it.
+// With the flag a new key still gets its line while another key is over its limit; without it zap sampling drops it.
 func TestReportLogLimitThroughProductionLogger(t *testing.T) {
 	clock := fixedClock(time.Unix(1793534400, 0))
 	tests := []struct {
