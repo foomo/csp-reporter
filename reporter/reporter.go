@@ -108,7 +108,7 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 			}
 			w.WriteHeader(http.StatusNoContent)
 		case "GET":
-			_, _ = w.Write([]byte("Welcome to CSV Reporter"))
+			_, _ = w.Write([]byte("Welcome to CSP Reporter"))
 		default:
 			requestsRejectedCount.WithLabelValues(rejectMethodNotAllowed).Inc()
 			w.WriteHeader(http.StatusMethodNotAllowed)
