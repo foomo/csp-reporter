@@ -22,7 +22,7 @@ updates:
 
   - package-ecosystem: gomod
     commit-message: { prefix: chore(gomod) }
-    directories: [ "**/*" ]
+    directories: [ "/", "/example/server" ]
     schedule:
       day: sunday
       interval: weekly
@@ -39,7 +39,7 @@ updates:
 
   - package-ecosystem: docker
     commit-message: { prefix: chore(docker) }
-    directories: [ "**/*" ]
+    directories: [ "/", "/example/server" ]
     schedule:
       day: sunday
       interval: weekly
