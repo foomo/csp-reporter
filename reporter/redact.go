@@ -11,7 +11,7 @@ const (
 	maxLoggedValueBytes = 2048
 	// maxLoggedPolicyBytes caps the policy and the directives, which are parts of it.
 	maxLoggedPolicyBytes = 4096
-	// maxLoggedSampleRunes matches the 40 characters browsers put in a sample.
+	// maxLoggedSampleRunes matches the sample length browsers send.
 	maxLoggedSampleRunes = 40
 )
 
@@ -20,8 +20,7 @@ func loggedURI(uri string) string {
 	return capBytes(redactURI(uri), maxLoggedValueBytes)
 }
 
-// redactURI drops the query, fragment and userinfo, which can carry tokens and credentials. It
-// works on the string rather than url.Parse, so values that do not parse are redacted as well.
+// redactURI drops query, fragment and userinfo on the string, not url.Parse, so unparsable values are redacted too.
 func redactURI(uri string) string {
 	if i := strings.IndexAny(uri, "?#"); i >= 0 {
 		uri = uri[:i]

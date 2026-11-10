@@ -43,8 +43,7 @@ func main() {
 	_ = log.Sync()
 }
 
-// run serves reports and metrics until ctx is done or a listener fails, then shuts both down.
-// It returns nil after ctx is done, so a stop signal exits cleanly.
+// run serves until ctx is done (returning nil, so a stop signal exits 0) or a listener fails.
 func run(ctx context.Context, log *zap.Logger, reporterAddress, prometheusAddress string) error {
 	reportServer := &http.Server{
 		Addr:              reporterAddress,

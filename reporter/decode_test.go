@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// TestDecodeParity pins the status and metric outcome of every body shape, so a change to
-// decodeReports cannot silently change what is answered or counted.
+// TestDecodeParity pins status and metrics per body shape, so decoder changes cannot shift them silently.
 func TestDecodeParity(t *testing.T) {
 	valid := `{"type":"csp-violation","body":{"documentURL":"https://www.globus.ch/","effectiveDirective":"img-src",` +
 		`"blockedURL":"https://example.com/x.png","disposition":"enforce"}}`

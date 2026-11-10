@@ -133,8 +133,7 @@ func AffectedDirective(cspr ContentSecurityPolicyReport) string {
 	return directive
 }
 
-// directiveWithSource prefers the effective directive, because a legacy violated-directive can
-// name the fallback that applied (default-src) instead of the kind of resource that was blocked.
+// directiveWithSource prefers the effective directive, as a legacy violated-directive may name the default-src fallback.
 func directiveWithSource(cspr ContentSecurityPolicyReport) (directive, source string) {
 	if d, _, _ := strings.Cut(cspr.EffectiveDirective, " "); isKnownDirective(d) {
 		return d, sourceEffectiveDirective

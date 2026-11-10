@@ -218,8 +218,7 @@ func observeRequest(method string, code int, elapsed time.Duration) {
 	httpRequestDuration.Observe(elapsed.Seconds())
 }
 
-// browserFamily maps a user agent to one of browsers. The order matters: Edge user agents also
-// name Chrome and Safari, and Chrome ones name Safari.
+// browserFamily checks Edge first and Safari last, because Edge user agents name Chrome and Safari too.
 func browserFamily(userAgent string) string {
 	switch {
 	case strings.Contains(userAgent, "Edg/") || strings.Contains(userAgent, "EdgA/") ||

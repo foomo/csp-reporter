@@ -42,7 +42,7 @@ Every `POST` body is classified by its JSON shape, not its `Content-Type`:
 | `OPTIONS` (CORS preflight) | `204` |
 | `GET` | `200` with a plain text greeting |
 | any other method | `405` |
-| request headers over 16 KiB | `431`, answered by the Go HTTP server before the handler runs, so it is not in the metrics |
+| request headers over the 16 KiB limit (the Go HTTP server allows a few KiB on top) | `431`, answered by the Go HTTP server before the handler runs, so it is not in the metrics |
 
 - A request records at most 100 reports; further CSP reports in the same batch are dropped and counted in `foomo_csr_reports_dropped_total{reason="batch_cap"}`.
 - `OPTIONS` and `POST` responses allow any origin: they echo the request's `Origin` (or `*` without one) in `Access-Control-Allow-Origin`, allow `POST, OPTIONS` and the `Content-Type` header; preflight answers also send `Access-Control-Max-Age: 86400`.

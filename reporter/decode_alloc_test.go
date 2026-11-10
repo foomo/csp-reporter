@@ -8,8 +8,7 @@ import (
 	"testing"
 )
 
-// decodeAllocBudget leaves room for the race detector, which allocates far more than a normal
-// build; decoding a whole 1 MiB batch at once allocated over 300 MiB.
+// decodeAllocBudget is loose enough for the race detector yet far below decoding the whole batch at once.
 const decodeAllocBudget = 96 << 20
 
 func TestDecodeReportsAllocations(t *testing.T) {
