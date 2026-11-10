@@ -28,6 +28,11 @@ const (
 	rejectReadError           = "read_error"
 	rejectUnsupportedEncoding = "unsupported_encoding"
 
+	sourceEffectiveDirective = "effective_directive"
+	sourceViolatedDirective  = "violated_directive"
+	sourceUnrecognised       = "unrecognised"
+	sourceMissing            = "missing"
+
 	methodOther = "other"
 )
 
@@ -76,6 +81,12 @@ var (
 		Name:      "blocked_kind_total",
 		Help:      "Counts recorded reports by the kind of blocked resource and disposition",
 	}, []string{"kind", "disposition"})
+	directiveSourceCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: metricsSubsystem,
+		Name:      "directive_source_total",
+		Help:      "Counts recorded reports by the report field their directive label was taken from",
+	}, []string{"source"})
 	lastReportTimestamp = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
 		Subsystem: metricsSubsystem,
@@ -99,6 +110,8 @@ var blockedKinds = []string{
 	"inline", "eval", "wasm_eval", "data", "blob", "extension", "https", "http", "other_scheme", "empty",
 }
 
+var directiveSources = []string{sourceEffectiveDirective, sourceViolatedDirective, sourceUnrecognised, sourceMissing}
+
 // Pre-create every series so dashboards show 0 instead of no data before the first event.
 func init() {
 	for _, mc := range httpSeries {
@@ -117,6 +130,9 @@ func init() {
 		for _, disposition := range []string{"enforce", "report"} {
 			blockedKindCount.WithLabelValues(kind, disposition)
 		}
+	}
+	for _, source := range directiveSources {
+		directiveSourceCount.WithLabelValues(source)
 	}
 }
 

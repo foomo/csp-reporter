@@ -123,15 +123,28 @@ func NewHandler(log *zap.Logger) http.HandlerFunc {
 }
 
 func AffectedDirective(cspr ContentSecurityPolicyReport) string {
-	parts := strings.Split(cspr.ViolatedDirective, " ")
-	directive := parts[0]
-
-	// Check if we support metrics for that directive
-	if _, ok := cspDirectives[directive]; !ok {
-		return unknownDirective
-	}
-
+	directive, _ := directiveWithSource(cspr)
 	return directive
+}
+
+// directiveWithSource prefers the effective directive, because a legacy violated-directive can
+// name the fallback that applied (default-src) instead of the kind of resource that was blocked.
+func directiveWithSource(cspr ContentSecurityPolicyReport) (directive, source string) {
+	if d, _, _ := strings.Cut(cspr.EffectiveDirective, " "); isKnownDirective(d) {
+		return d, sourceEffectiveDirective
+	}
+	if d, _, _ := strings.Cut(cspr.ViolatedDirective, " "); isKnownDirective(d) {
+		return d, sourceViolatedDirective
+	}
+	if cspr.EffectiveDirective == "" && cspr.ViolatedDirective == "" {
+		return unknownDirective, sourceMissing
+	}
+	return unknownDirective, sourceUnrecognised
+}
+
+func isKnownDirective(directive string) bool {
+	_, ok := cspDirectives[directive]
+	return ok
 }
 
 // maxBodyBytes caps one request; a Reporting API batch of CSP reports stays far below it.
@@ -333,7 +346,8 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 func logReport(log *zap.Logger, report receivedReport, requestUserAgent string) {
 	csp := report.CSP
 	disposition := "enforce"
-	if csp.Disposition == "report" {
+	// CSP3 says "report" but MDN documents "reporting", so either one means report-only.
+	if csp.Disposition == "report" || csp.Disposition == "reporting" {
 		disposition = "report"
 	}
 	userAgent := report.UserAgent
@@ -342,7 +356,9 @@ func logReport(log *zap.Logger, report receivedReport, requestUserAgent string) 
 	}
 
 	// Increase Violated Directive (With Cardinality)
-	violatedDirectivesCount.WithLabelValues(AffectedDirective(csp), disposition).Inc()
+	directive, source := directiveWithSource(csp)
+	violatedDirectivesCount.WithLabelValues(directive, disposition).Inc()
+	directiveSourceCount.WithLabelValues(source).Inc()
 	blockedKindCount.WithLabelValues(blockedKind(csp.BlockedUri), disposition).Inc()
 	lastReportTimestamp.SetToCurrentTime()
 

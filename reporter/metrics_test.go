@@ -72,6 +72,7 @@ func TestMetricsPreinitialised(t *testing.T) {
 		"foomo_csr_reports_dropped_total":   3,
 		"foomo_csr_requests_rejected_total": len(rejectReasons),
 		"foomo_csr_blocked_kind_total":      len(blockedKinds) * 2,
+		"foomo_csr_directive_source_total":  len(directiveSources),
 	}
 	for _, mf := range startupFamilies {
 		n, ok := want[mf.GetName()]
@@ -110,6 +111,9 @@ func takeSnapshot(t *testing.T) snapshot {
 	}
 	for _, r := range rejectReasons {
 		s["rejected/"+r] = testutil.ToFloat64(requestsRejectedCount.WithLabelValues(r))
+	}
+	for _, src := range directiveSources {
+		s["source/"+src] = testutil.ToFloat64(directiveSourceCount.WithLabelValues(src))
 	}
 	for _, k := range blockedKinds {
 		for _, d := range []string{"enforce", "report"} {
@@ -151,6 +155,13 @@ func checkDelta(t *testing.T, got, want snapshot) {
 	// Recorded reports are the received ones minus those beyond the cap.
 	if received := got["received/legacy"] + got["received/reporting-api"]; got["directive"] != received-got["dropped/batch_cap"] {
 		t.Errorf("recorded %v reports, received %v and capped %v", got["directive"], received, got["dropped/batch_cap"])
+	}
+	var sources float64
+	for _, src := range directiveSources {
+		sources += got["source/"+src]
+	}
+	if sources != got["directive"] {
+		t.Errorf("recorded %v reports but %v directive sources", got["directive"], sources)
 	}
 }
 
@@ -202,7 +213,20 @@ func TestHandlerMetrics(t *testing.T) {
 			method: http.MethodPost,
 			body: `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src",` +
 				`"blocked-uri":"data","disposition":"report"}}`,
-			want: snapshot{"http/POST/204": 1, "received/legacy": 1, "directive": 1, "blocked/data/report": 1},
+			want: snapshot{
+				"http/POST/204": 1, "received/legacy": 1, "directive": 1, "source/violated_directive": 1,
+				"blocked/data/report": 1,
+			},
+		},
+		{
+			name:   "legacy report-only report with a fallback violated directive",
+			method: http.MethodPost,
+			body: `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"default-src 'self'",` +
+				`"effective-directive":"img-src","blocked-uri":"data","disposition":"reporting"}}`,
+			want: snapshot{
+				"http/POST/204": 1, "received/legacy": 1, "directive": 1, "source/effective_directive": 1,
+				"blocked/data/report": 1,
+			},
 		},
 		{
 			name:   "mixed Reporting API batch",
@@ -217,7 +241,8 @@ func TestHandlerMetrics(t *testing.T) {
 			}, ",") + "]",
 			want: snapshot{
 				"http/POST/204": 1, "received/reporting-api": 3, "dropped/non_csp_type": 2, "dropped/empty_body": 1,
-				"directive": 3, "blocked/https/enforce": 1, "blocked/inline/report": 1, "blocked/eval/enforce": 1,
+				"directive": 3, "source/effective_directive": 3,
+				"blocked/https/enforce": 1, "blocked/inline/report": 1, "blocked/eval/enforce": 1,
 			},
 		},
 		{
@@ -226,14 +251,18 @@ func TestHandlerMetrics(t *testing.T) {
 			body:   cappedBatch,
 			want: snapshot{
 				"http/POST/204": 1, "received/reporting-api": maxReportsPerRequest + 50, "dropped/batch_cap": 50,
-				"directive": maxReportsPerRequest, "blocked/https/enforce": maxReportsPerRequest,
+				"directive": maxReportsPerRequest, "source/effective_directive": maxReportsPerRequest,
+				"blocked/https/enforce": maxReportsPerRequest,
 			},
 		},
 		{
 			name:   "single Reporting API report",
 			method: http.MethodPost,
 			body:   valid("worker-src", "blob:https://www.globus.ch/1", "enforce"),
-			want:   snapshot{"http/POST/204": 1, "received/reporting-api": 1, "directive": 1, "blocked/blob/enforce": 1},
+			want: snapshot{
+				"http/POST/204": 1, "received/reporting-api": 1, "directive": 1, "source/effective_directive": 1,
+				"blocked/blob/enforce": 1,
+			},
 		},
 		{
 			name:   "single non-CSP report",
@@ -301,8 +330,8 @@ func TestHandlerMetrics(t *testing.T) {
 func TestHandlerContentEncoding(t *testing.T) {
 	body := `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src","blocked-uri":"data"}}`
 	accepted := snapshot{
-		"http/POST/204": 1, "received/legacy": 1, "directive": 1, "blocked/data/enforce": 1,
-		"durations": 1, "bodies": 1, "bodyBytes": float64(len(body)),
+		"http/POST/204": 1, "received/legacy": 1, "directive": 1, "source/violated_directive": 1,
+		"blocked/data/enforce": 1, "durations": 1, "bodies": 1, "bodyBytes": float64(len(body)),
 	}
 	// The body of a refused request is never read, so it adds no body size.
 	refused := snapshot{"http/POST/415": 1, "rejected/unsupported_encoding": 1, "durations": 1}

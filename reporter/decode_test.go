@@ -35,7 +35,10 @@ func TestDecodeParity(t *testing.T) {
 			body: `{"csp-report":{"document-uri":"https://www.globus.ch/","violated-directive":"img-src",` +
 				`"blocked-uri":"data","disposition":"report"}}`,
 			code: http.StatusNoContent,
-			want: snapshot{"http/POST/204": 1, "received/legacy": 1, "directive": 1, "blocked/data/report": 1},
+			want: snapshot{
+				"http/POST/204": 1, "received/legacy": 1, "directive": 1, "source/violated_directive": 1,
+				"blocked/data/report": 1,
+			},
 		},
 		{
 			name: "Reporting API array with mixed types, empty bodies and more than the cap",
@@ -44,14 +47,18 @@ func TestDecodeParity(t *testing.T) {
 			want: snapshot{
 				"http/POST/204": 1, "received/reporting-api": maxReportsPerRequest + 20, "dropped/batch_cap": 20,
 				"dropped/non_csp_type": 3, "dropped/empty_body": 6,
-				"directive": maxReportsPerRequest, "blocked/https/enforce": maxReportsPerRequest,
+				"directive": maxReportsPerRequest, "source/effective_directive": maxReportsPerRequest,
+				"blocked/https/enforce": maxReportsPerRequest,
 			},
 		},
 		{
 			name: "single Reporting API object",
 			body: valid,
 			code: http.StatusNoContent,
-			want: snapshot{"http/POST/204": 1, "received/reporting-api": 1, "directive": 1, "blocked/https/enforce": 1},
+			want: snapshot{
+				"http/POST/204": 1, "received/reporting-api": 1, "directive": 1, "source/effective_directive": 1,
+				"blocked/https/enforce": 1,
+			},
 		},
 		{name: "empty array", body: `[]`, code: http.StatusNoContent, want: snapshot{"http/POST/204": 1}},
 		{name: "empty array with whitespace", body: " \n[ \t]\r\n", code: http.StatusNoContent, want: snapshot{"http/POST/204": 1}},
@@ -85,7 +92,7 @@ func TestDecodeParity(t *testing.T) {
 			code: http.StatusNoContent,
 			want: snapshot{
 				"http/POST/204": 1, "received/reporting-api": 1, "dropped/non_csp_type": 1, "directive": 1,
-				"blocked/https/enforce": 1,
+				"source/effective_directive": 1, "blocked/https/enforce": 1,
 			},
 		},
 		{
@@ -94,7 +101,7 @@ func TestDecodeParity(t *testing.T) {
 			code: http.StatusNoContent,
 			want: snapshot{
 				"http/POST/204": 1, "received/reporting-api": 1, "dropped/non_csp_type": 1, "directive": 1,
-				"blocked/https/enforce": 1,
+				"source/effective_directive": 1, "blocked/https/enforce": 1,
 			},
 		},
 		{
@@ -151,20 +158,29 @@ func TestDecodeParity(t *testing.T) {
 				`"effectiveDirective":"img-src","blockedURL":"data"},"body":{"documentURL":"https://www.globus.ch/",` +
 				`"effectiveDirective":"img-src","blockedURL":"blob"}}]`,
 			code: http.StatusNoContent,
-			want: snapshot{"http/POST/204": 1, "received/reporting-api": 1, "directive": 1, "blocked/blob/enforce": 1},
+			want: snapshot{
+				"http/POST/204": 1, "received/reporting-api": 1, "directive": 1, "source/effective_directive": 1,
+				"blocked/blob/enforce": 1,
+			},
 		},
 		{
 			name: "duplicate keys in a legacy report",
 			body: `{"csp-report":{"violated-directive":"img-src","blocked-uri":"data"},` +
 				`"csp-report":{"violated-directive":"img-src","blocked-uri":"inline"}}`,
 			code: http.StatusNoContent,
-			want: snapshot{"http/POST/204": 1, "received/legacy": 1, "directive": 1, "blocked/inline/enforce": 1},
+			want: snapshot{
+				"http/POST/204": 1, "received/legacy": 1, "directive": 1, "source/violated_directive": 1,
+				"blocked/inline/enforce": 1,
+			},
 		},
 		{
 			name: "invalid UTF-8 in a string",
 			body: "{\"csp-report\":{\"document-uri\":\"https://www.globus.ch/\xff\",\"violated-directive\":\"img-src\",\"blocked-uri\":\"eval\"}}",
 			code: http.StatusNoContent,
-			want: snapshot{"http/POST/204": 1, "received/legacy": 1, "directive": 1, "blocked/eval/enforce": 1},
+			want: snapshot{
+				"http/POST/204": 1, "received/legacy": 1, "directive": 1, "source/violated_directive": 1,
+				"blocked/eval/enforce": 1,
+			},
 		},
 		{
 			name: "oversized body",
