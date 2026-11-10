@@ -7,9 +7,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"go.uber.org/zap"
@@ -20,7 +22,7 @@ import (
 // largeReport is a valid report whose padding puts it over the size that takes no upload slot.
 var largeReport = rateTestReport + strings.Repeat(" ", maxUnslottedBodyBytes)
 
-// holdSlot starts a POST of unknown length that holds a slot until the returned func finishes it and returns its status.
+// holdSlot starts a POST declaring a large body that holds a slot until the returned func finishes it and returns its status.
 func holdSlot(t *testing.T, handler http.HandlerFunc) (finish func() int) {
 	t.Helper()
 	pr, pw := io.Pipe()
@@ -28,14 +30,16 @@ func holdSlot(t *testing.T, handler http.HandlerFunc) (finish func() int) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		handler(rec, httptest.NewRequest(http.MethodPost, "/", pr))
+		req := httptest.NewRequest(http.MethodPost, "/", pr)
+		req.ContentLength = int64(len(largeReport))
+		handler(rec, req)
 	}()
 	// An io.Pipe write returns only once the handler has read it.
-	if _, err := pw.Write([]byte(rateTestReport[:20])); err != nil {
+	if _, err := pw.Write([]byte(largeReport[:20])); err != nil {
 		t.Fatal(err)
 	}
 	return func() int {
-		_, _ = pw.Write([]byte(rateTestReport[20:]))
+		_, _ = pw.Write([]byte(largeReport[20:]))
 		_ = pw.Close()
 		<-done
 		return rec.Code
@@ -67,6 +71,18 @@ func TestMaxConcurrentUploads(t *testing.T) {
 	}
 	checkDelta(t, takeSnapshot(t).delta(before), snapshot{"http/POST/503": 1, "rejected/overloaded": 1, "durations": 1})
 
+	// Of unknown length, it is refused once more than 64 KiB has arrived, and the rest is not read.
+	before = takeSnapshot(t)
+	spy := &readSpy{r: strings.NewReader(strings.Repeat("x", maxBodyBytes))}
+	req := httptest.NewRequest(http.MethodPost, "/", io.MultiReader(strings.NewReader(largeReport), spy))
+	rec = httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" || spy.read.Load() {
+		t.Errorf("chunked upload past 64 KiB with every slot held: status %d, Retry-After %q, rest read %v; want 503, 1, false",
+			rec.Code, rec.Header().Get("Retry-After"), spy.read.Load())
+	}
+	checkDelta(t, takeSnapshot(t).delta(before), snapshot{"http/POST/503": 1, "rejected/overloaded": 1, "durations": 1})
+
 	tests := []struct {
 		name   string
 		body   string
@@ -74,7 +90,9 @@ func TestMaxConcurrentUploads(t *testing.T) {
 		header []string
 		want   int
 	}{
-		{"unknown length", rateTestReport, -1, nil, http.StatusServiceUnavailable},
+		{"small report of unknown length", rateTestReport, -1, nil, http.StatusNoContent},
+		{"exactly 64 KiB of unknown length", largeReport[:maxUnslottedBodyBytes], -1, nil, http.StatusNoContent},
+		{"one byte over 64 KiB of unknown length", largeReport[:maxUnslottedBodyBytes+1], -1, nil, http.StatusServiceUnavailable},
 		{"declared length one byte over 64 KiB", largeReport[:maxUnslottedBodyBytes+1], maxUnslottedBodyBytes + 1, nil, http.StatusServiceUnavailable},
 		{"declared length of exactly 64 KiB", largeReport[:maxUnslottedBodyBytes], maxUnslottedBodyBytes, nil, http.StatusNoContent},
 		{"small report", rateTestReport, int64(len(rateTestReport)), nil, http.StatusNoContent},
@@ -102,10 +120,36 @@ func TestMaxConcurrentUploads(t *testing.T) {
 	}
 	// Both slots are free again.
 	held = []func() int{holdSlot(t, handler)}
-	if rec, _ := postLength(handler, largeReport, int64(len(largeReport))); rec.Code != http.StatusNoContent {
-		t.Errorf("large upload after the slots were freed = %d, want 204", rec.Code)
+	before = takeSnapshot(t)
+	if rec, _ := postLength(handler, largeReport, -1); rec.Code != http.StatusNoContent {
+		t.Errorf("large upload of unknown length after the slots were freed = %d, want 204", rec.Code)
+	}
+	if got := takeSnapshot(t).delta(before)["bodyBytes"]; got != float64(len(largeReport)) {
+		t.Errorf("read %v body bytes, want all %d", got, len(largeReport))
 	}
 	held[0]()
+}
+
+// A read error before or after 64 KiB of an unknown length is a read error, and frees any slot it took.
+func TestMaxConcurrentUploadsReadError(t *testing.T) {
+	handler := NewHandler(zap.NewNop(), WithMaxConcurrentUploads(1))
+	for name, body := range map[string]string{"small": rateTestReport[:20], "large": largeReport} {
+		t.Run(name, func(t *testing.T) {
+			before := takeSnapshot(t)
+			req := httptest.NewRequest(http.MethodPost, "/", io.MultiReader(strings.NewReader(body), iotest.ErrReader(os.ErrDeadlineExceeded)))
+			rec := httptest.NewRecorder()
+			handler(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", rec.Code)
+			}
+			if got := takeSnapshot(t).delta(before)["rejected/read_error"]; got != 1 {
+				t.Errorf("read_error grew by %v, want 1", got)
+			}
+			if rec, _ := postLength(handler, largeReport, -1); rec.Code != http.StatusNoContent {
+				t.Errorf("large upload afterwards = %d, want 204", rec.Code)
+			}
+		})
+	}
 }
 
 // A request over the rate limit is answered 429 before it could take a slot.
@@ -137,7 +181,7 @@ func TestMaxConcurrentUploadsPanic(t *testing.T) {
 	}))
 	handler := NewHandler(log, WithMaxConcurrentUploads(1))
 	for _, want := range []int{http.StatusInternalServerError, http.StatusNoContent} {
-		if rec, _ := postLength(handler, rateTestReport, -1); rec.Code != want {
+		if rec, _ := postLength(handler, largeReport, -1); rec.Code != want {
 			t.Errorf("status = %d, want %d", rec.Code, want)
 		}
 	}
@@ -176,7 +220,7 @@ func (f *firstRead) Read(p []byte) (int, error) {
 	return f.ReadCloser.Read(p)
 }
 
-// Through a real server, a small declared length takes no slot and cannot carry more than it declares.
+// Through a real server, a small declared or chunked body takes no slot, and a declared length cannot carry more than it declares.
 func TestMaxConcurrentUploadsDeclaredLength(t *testing.T) {
 	handler := NewHandler(zap.NewNop(), WithMaxConcurrentUploads(1))
 	started := make(chan struct{})
@@ -219,5 +263,18 @@ func TestMaxConcurrentUploadsDeclaredLength(t *testing.T) {
 	}
 	if got := takeSnapshot(t).delta(before)["bodyBytes"]; got != float64(len(rateTestReport)) {
 		t.Errorf("read %v body bytes, want the declared %d", got, len(rateTestReport))
+	}
+
+	// A small chunked report declares no length and still takes no slot.
+	chunked := dial()
+	defer chunked.Close()
+	fmt.Fprintf(chunked, "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n%x\r\n%s\r\n0\r\n\r\n", len(rateTestReport), rateTestReport)
+	resp, err = http.ReadResponse(bufio.NewReader(chunked), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("small chunked report while the slot is held = %d, want 204", resp.StatusCode)
 	}
 }

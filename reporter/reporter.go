@@ -62,7 +62,7 @@ type handler struct {
 	noise      *noiseFilter
 	sites      *Sites
 	logLimiter *logLimiter
-	// uploads holds one token per POST with a large or unknown body length, from before its body is read until it is answered.
+	// uploads holds one token per POST whose body is over 64 KiB, declared or read so far, until it is answered.
 	uploads chan struct{}
 }
 
@@ -135,8 +135,19 @@ func NewHandler(log *zap.Logger, opts ...Option) http.HandlerFunc {
 				http.Error(w, `{"message":"unsupported content encoding"}`, http.StatusUnsupportedMediaType)
 				return
 			}
+			// The server's own writer, so MaxBytesReader can still close the connection on overflow.
+			body := io.Reader(http.MaxBytesReader(rw, r.Body, maxBodyBytes))
 			// A small declared length needs no slot: the server reads no more than it declares.
-			if h.uploads != nil && (r.ContentLength < 0 || r.ContentLength > maxUnslottedBodyBytes) {
+			large := r.ContentLength > maxUnslottedBodyBytes
+			if h.uploads != nil && r.ContentLength < 0 {
+				// An unknown length takes a slot only once it has carried more than 64 KiB, so small chunked reports never wait.
+				var prefix bytes.Buffer
+				// A read error is not lost: MaxBytesReader returns it again when the decoder reads on.
+				_, _ = prefix.ReadFrom(io.LimitReader(body, maxUnslottedBodyBytes+1))
+				large = prefix.Len() > maxUnslottedBodyBytes
+				body = io.MultiReader(&prefix, body)
+			}
+			if h.uploads != nil && large {
 				select {
 				case h.uploads <- struct{}{}:
 					// Deferred, so the slot is freed on every return and on a panic.
@@ -148,8 +159,7 @@ func NewHandler(log *zap.Logger, opts ...Option) http.HandlerFunc {
 					return
 				}
 			}
-			// The server's own writer, so MaxBytesReader can still close the connection on overflow.
-			reports, stats, err := decodeFilteredReports(http.MaxBytesReader(rw, r.Body, maxBodyBytes), h.noise)
+			reports, stats, err := decodeFilteredReports(body, h.noise)
 			requestBodyBytes.Observe(float64(stats.bodyBytes))
 			if errors.Is(err, errBodyTooLarge) {
 				requestsRejectedCount.WithLabelValues(rejectBodyTooLarge).Inc()

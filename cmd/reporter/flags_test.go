@@ -51,16 +51,18 @@ func TestParseFlagsDefaultUploadBound(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", pr))
+			req := httptest.NewRequest(http.MethodPost, "/", pr)
+			req.ContentLength = 1 << 20
+			handler(httptest.NewRecorder(), req)
 		}()
 		// Returns once the handler reads, so its slot is taken.
 		if _, err := pw.Write([]byte("{")); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Not a strings.Reader, so the length is unknown and the request needs a slot.
+	// Not a strings.Reader, so the length is unknown, and one byte over 64 KiB needs a slot.
 	rec := httptest.NewRecorder()
-	handler(rec, httptest.NewRequest(http.MethodPost, "/", io.NopCloser(strings.NewReader("{}"))))
+	handler(rec, httptest.NewRequest(http.MethodPost, "/", io.NopCloser(strings.NewReader(strings.Repeat(" ", 64<<10+1)))))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("upload number %d = %d, want 503", defaultMaxConcurrentUploads+1, rec.Code)
 	}

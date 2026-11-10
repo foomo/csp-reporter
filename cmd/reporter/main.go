@@ -27,7 +27,7 @@ const (
 	defaultLogSamplingCount = 100
 	defaultLogEncoding      = "json"
 	shutdownTimeout         = 10 * time.Second
-	// defaultMaxConcurrentUploads is on, unlike the other protections, because it bounds memory and costs ordinary reports nothing.
+	// defaultMaxConcurrentUploads is on, unlike the other protections, because it bounds the memory of large uploads and costs ordinary reports nothing.
 	defaultMaxConcurrentUploads = 64
 )
 
@@ -107,7 +107,7 @@ func parseFlags(args []string, output io.Writer, reportLog *zap.Logger) (setting
 	fs.Var(&dropHosts, "drop-blocked-hosts", "comma-separated hosts whose blocked resources, subdomains included, are dropped")
 	fs.Var(&sites, "site", "repeatable name=host[,host...]; label reports by document host, *.host matches subdomains")
 	fs.Func("log-limit-per-key", "report log lines per second per key, unsampled, 100 per second in total (default 0, off: zap sampling)", countFlag(&logLimitPerKey))
-	fs.Func("max-concurrent-uploads", fmt.Sprintf("POST requests with a body over 64 KiB or of unknown length handled at once, answered with 503 beyond it; smaller bodies are never limited (default %d, 0 off)", defaultMaxConcurrentUploads), countFlag(&maxUploads))
+	fs.Func("max-concurrent-uploads", fmt.Sprintf("POST requests with a body declared or read past 64 KiB handled at once, answered with 503 beyond it; smaller bodies are never limited, chunked or not (default %d, 0 off)", defaultMaxConcurrentUploads), countFlag(&maxUploads))
 	if err := fs.Parse(args); err != nil {
 		return s, err
 	}
